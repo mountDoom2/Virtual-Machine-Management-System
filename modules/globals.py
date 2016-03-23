@@ -1,0 +1,1 @@
+g_prompt = "manager> "
