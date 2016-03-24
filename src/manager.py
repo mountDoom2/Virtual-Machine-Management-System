@@ -35,9 +35,11 @@ class Interpret():
 
     def createCommands(self):
         commands = {"help": ("Prints this help", self.cmdHelp),
+                    "createvm": ("Create a virtual machine", self.cmdCreateVM),
                     "startvm": ("Start virtual machine", self.cmdStartVM),
                     "exportvm": ("Export virtual machine", self.cmdExportVM),
                     "importvm": ("Import virtual machine", self.cmdImportVM),
+                    "host": ("Show info about host", self.cmdHost),
                     "exit": ("Quit program", self.cmdExit),
                    }
         if self.isRemote:
@@ -104,7 +106,17 @@ class Interpret():
     def cmdHelp(self, args):
         print "This is help"
         return 0
-    
+
+    def cmdCreateVM(self, args):
+        if len(args) < 2 or len(args) > 2:
+            print "Wrong arguments for startvm"
+        name = args[1]
+        
+        mach = self.active.info['vbox'].createMachine("", name, None, "Ubuntu_64", 1)
+        mach.saveSettings()
+        self.active.info['vbox'].registerMachine(mach)
+        return 0
+                 
     def cmdExit(self, args):
         return 1
     
@@ -201,6 +213,13 @@ class Interpret():
     
         return 0
     
+    def cmdHost(self, args):
+        if len(args) > 1:
+            print "Wrong arguments for host"
+            return 0
+        for key, value in self.active.info.items():
+            print key + ": " + str(value)
+            
     def runCommandWithArgs(self, args):
         cmd = args[0]
         try:
