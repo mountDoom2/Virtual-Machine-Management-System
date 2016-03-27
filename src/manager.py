@@ -3,18 +3,19 @@ import argparse
 import os
 from os import path
 import sys
-sys.path.append(os.getcwd())
+import shlex
+import traceback
+
+sys.path.append(path.dirname(path.dirname(path.realpath(sys.argv[0]))))
 from modules.exceptions import *
 from modules.globals import *
-import traceback
 
 class Environment():
     def __init__(self, info):
         self.info = info
         
 class Interpret():
-    def __init__(self, args):
-        
+    def __init__(self, args):       
         self.envs = {}
         self.active = None
         self.isRemote = args.style == 'WEBSERVICE'
@@ -33,13 +34,93 @@ class Interpret():
             self.envs[url] = env
         self.active = env
 
+    def cmdRestartVM(self, args):
+        if len(args) != 2:
+            print "Wrong arguments for restart. Usage: restart <machine_name|machine uuid>"
+            return 0
+        machname = args[1]
+        machine, session = self.lockSession(machname)
+        session.console.reset()
+        return 0
+    
+    def cmdPause(self, args):
+        if len(args) != 2:
+            print "Wrong arguments for pause. Usage: pause <machine_name|machine uuid>"
+            return 0
+        machname = args[1]
+        machine, session = self.lockSession(machname)
+        session.console.pause()
+        return 0
+                
+    def cmdResume(self, args):
+        if len(args) != 2:
+            print "Wrong arguments for resume. Usage: resume <machine_name|machine uuid>"
+            return 0
+        machname = args[1]
+        machine, session = self.lockSession(machname)
+        session.console.resume() 
+        return 0
+                
+    def cmdPowerOff(self, args):
+        if len(args) != 2:
+            print "Wrong arguments for poweroff. Usage: poweroff <machine_name|machine uuid>"
+            return 0
+        machname = args[1]
+        machine, session = self.lockSession(machname)
+        progress = session.console.powerDown() 
+        self.progressBar(progress)               
+        return 0
+    
+    def cmdPowerButton(self, args):
+        if len(args) != 2:
+            print "Wrong arguments for powerbutton. Usage: powerbutton <machine_name|machine uuid>"
+            return 0
+        machname = args[1]
+        machine, session = self.lockSession(machname)
+        session.console.powerButton()
+        return 0
+            
+    def cmdSleepButton(self, args):
+        if len(args) != 2:
+            print "Wrong arguments for sleepbutton. Usage: sleepbutton <machine_name|machine uuid>"
+            return 0
+        machname = args[1]
+        machine, session = self.lockSession(machname)
+        session.console.sleepButton()
+        return 0
+    
+    def cmdSleep(self, args):
+        if len(args) != 2:
+            print "Wrong arguments for sleep. Usage: sleep <time>"
+            return 0
+        from time import sleep
+        sleep(args[1])
+        return 0
+                
+    def lockSession(self, machname):
+        vbox = self.active.info['vbox']
+        const = self.active.info['const']
+        machine = vbox.findMachine(machname)
+        session = self.active.info['mgr'].getSessionObject(vbox)
+        machine.lockMachine(session, const.LockType_Shared)
+        return machine, session
+        
     def createCommands(self):
         commands = {"help": ("Prints this help", self.cmdHelp),
                     "createvm": ("Create a virtual machine", self.cmdCreateVM),
+                    "removevm": ("Create a virtual machine", self.cmdRemoveVM),
                     "startvm": ("Start virtual machine", self.cmdStartVM),
+                    "reset": ("Restart virtual machine", self.cmdRestartVM),
+                    "pause": ("Pause virtual machine", self.cmdPause),            
+                    "resume": ("Resume virtual machine", self.cmdResume),
+                    "poweroff": ("Power off a virtual machine", self.cmdPowerOff),
+                    "powerbutton": ("Power off a virtual machine", self.cmdPowerButton),
+                    "sleepbutton": ("Sleep a virtual machine", self.cmdSleepButton),                            
                     "exportvm": ("Export virtual machine", self.cmdExportVM),
                     "importvm": ("Import virtual machine", self.cmdImportVM),
                     "host": ("Show info about host", self.cmdHost),
+                    "guest": ("Execute a command on guest", self.cmdGuest),
+                    "sleep": ("Sleep for a period of time", self.cmdSleep),
                     "exit": ("Quit program", self.cmdExit),
                    }
         if self.isRemote:
@@ -47,6 +128,7 @@ class Interpret():
             commands["removehost"] = ("Remove host", self.cmdRemoveHost)
             commands['switchhost'] = ('Switch to another host', self.cmdSwitchHost)
             commands['connect'] = ('Connect to remote Virtual Box', self.cmdConnect)
+            commands['reconnect'] = ('Reconnects to a remote Virtual Box', self.cmdReconnect)
             commands['disconnect'] = ('Disconnect from remote Virtual Box', self.cmdDisconnect)
         return commands  
      
@@ -63,7 +145,9 @@ class Interpret():
     def progressBar(self, progress, update_time=1000):
         try:
             while not progress.completed:
-                print "[" + int(progress.percent)/2 * "=" + ">]\r",
+                percent = progress.percent
+                string = "[" + int(percent)/2 * "=" + ">]"
+                print string + (60 - len(string) - 3) * " " + str(percent) + "%\r",
                 sys.stdout.flush()
                 progress.waitForCompletion(update_time)
             
@@ -78,7 +162,7 @@ class Interpret():
     
     def cmdConnect(self, args):
         if len(args) < 2 or len(args > 4):
-            print "Wrong arguments for startvm"
+            print "Wrong arguments for connect. Usage: connect <hostname|ip> [port] [user] [password]"
             return 0
         
         if self.active.info['vbox'] is not None:
@@ -92,16 +176,35 @@ class Interpret():
         self.active.info['remoteinfo'] = [url, user, password]
         
         self.active.info['mgr'].platform.connect(url, user, password)
-        self.active.info['vbox'] = env['mgr'].vbox  
+        self.active.info['vbox'] = self.active.info['mgr'].vbox  
+        return 0
+    
+    def cmdReconnect(self, args):
+        if len(args) != 1:
+            print "Too many arguments for disconnect"
+            return 0
+        try:
+            [url, user, password] = self.active.info['remoteinfo'] 
+        except KeyError:
+            print "Trying to recconect to the unknown host machine"
+            return 0
+        try:
+            self.active.info['mgr'].platform.disconnect()
+        except: # Do nothing if already disconnected
+            pass 
+        vbox = self.active.info['mgr'].platform.connect(url, user, password)
+        self.active.info['vbox'] = vbox
         return 0
     
     def cmdDisconnect(self, args):
-        if len(args) > 1:
+        if len(args) != 2:
             print "Too many arguments for disconnect"
             return 0
-        
-        self.active.info['mgr'].platform.disconnect()
-        return
+        try:
+            self.active.info['mgr'].platform.disconnect()
+        except:
+            pass
+        return 0
     
     def cmdHelp(self, args):
         print "This is help"
@@ -116,10 +219,48 @@ class Interpret():
         mach.saveSettings()
         self.active.info['vbox'].registerMachine(mach)
         return 0
-                 
+
+    def cmdRemoveVM(self, args):
+        if len(args) < 2 or len(args) > 2:
+            print "Wrong arguments for removevm"
+        name = args[1]
+        machine = self.active.info['vbox'].findMachine(name)
+        flag = 3
+        medias = machine.unregister(flag)
+        progress = machine.deleteConfig(medias)
+        self.progressBar(progress, 100)
+        return 0            
+    
     def cmdExit(self, args):
         return 1
-    
+   
+    def cmdGuest(self, args):
+        if len(args) < 3:
+            print "Wrong arguments for guest"
+            return 0
+        machname = args[1]
+        executable = args[2]
+        guestargs = args[2:]
+        
+        vbox = self.active.info['vbox']
+        mach = vbox.findMachine(machname)
+        session = self.active.info['mgr'].getSessionObject(vbox)
+        mach.lockMachine(session, self.active.info['const'].LockType_Shared)
+        
+        import getpass
+        user = raw_input("User: ")
+        password = raw_input("Password: ")
+        guestSession = session.console.guest.createSession(user, password, '', '')
+        print guestSession.waitFor(1, 10000)
+        print guestSession.pathStyle
+        print "Starting process %s with args %s"%(executable, str(guestargs))
+        proc = guestSession.processCreate(executable, guestargs, None, None, 0)
+        proc.waitFor(1,10000)
+        print "Process %s started"%str(proc.PID)
+        proc.waitFor(2,10000)
+        print "Process exited with exit code " + str(proc.exitCode)
+        return 0
+        
     def cmdAddHost(self, args):
         if len(args) < 2 or len(args) > 4:
             print "Wrong arguments for addhost"
@@ -160,8 +301,9 @@ class Interpret():
         if len(args) != 2:
             print "Wrong arguments for switchhost"
             return 0
-        global g_envs
+        url = args[1]
         self.active = self.envs[url]
+        self.cmdReconnect([""])
         return 0
     
     def cmdStartVM(self, args):
@@ -229,20 +371,19 @@ class Interpret():
         if ci is None:
             print "Unknown command %s. Use 'help' to get commands"%cmd
             return 0
-        print args
         return ci[1](args)
         
     def runCmd(self, cmd):
         if len(cmd) == 0:
             return 0
-        args = cmd.split()
+        args = shlex.split(cmd)
+        print args
         if len(args) == 0:
             return 0
         return self.runCommandWithArgs(args)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("-v", "--verbose", dest="verbose", action="store_true", default=False, help = "Print more info")
     parser.add_argument("-w", "--webservice", dest="style", action="store_const", const="WEBSERVICE", help = "Use webservice")
     args = parser.parse_args(sys.argv[1:])
     interpret = Interpret(args)
