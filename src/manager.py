@@ -5,6 +5,9 @@ from os import path
 import sys
 import shlex
 import traceback
+#TODO: command for setting env. variable
+#      performance collector
+#      set cpus/ram/gram
 
 sys.path.append(path.dirname(path.dirname(path.realpath(sys.argv[0]))))
 from modules.exceptions import *
@@ -15,25 +18,28 @@ class Environment():
         self.info = info
         
 class Interpret():
-    def __init__(self, args):       
-        self.envs = {}
-        self.active = None
-        self.isRemote = args.style == 'WEBSERVICE'
+    def __init__(self, style):       
+        self.envs = {}        
+        self.isRemote = (style == 'WEBSERVICE')
         self.commands = self.createCommands()
-        
-        params = None
-        vboxMgr = VirtualBoxManager(args.style, params)
-        env = Environment({'mgr' : vboxMgr,
-                           'vbox': vboxMgr.vbox,
-                           'const': vboxMgr.constants,
-                           'remote': vboxMgr.remote
-                           })
-        if self.isRemote:
+        self.active = None
+    
+    def addEnv(self, env):
+        if not isinstance(env, Environment):
+            print "Environment object invalid"
+            return
+        if 'remoteinfo' in env.info.keys():
+            url = env.info['remoteinfo'][0]
+        else:
             url = "http://localhost:18083"
-            env.info['remoteinfo'] = [url, "", ""]
-            self.envs[url] = env
-        self.active = env
-
+        self.envs[url] = env
+    
+    def setActiveEnv(self, url):
+        if url not in self.envs.keys():
+            print "Environment does not exist"
+            return 0
+        self.active = self.envs[url]
+            
     def cmdRestartVM(self, args):
         if len(args) != 2:
             print "Wrong arguments for restart. Usage: restart <machine_name|machine uuid>"
@@ -128,11 +134,14 @@ class Interpret():
             commands["removehost"] = ("Remove host", self.cmdRemoveHost)
             commands['switchhost'] = ('Switch to another host', self.cmdSwitchHost)
             commands['connect'] = ('Connect to remote Virtual Box', self.cmdConnect)
-            commands['reconnect'] = ('Reconnects to a remote Virtual Box', self.cmdReconnect)
             commands['disconnect'] = ('Disconnect from remote Virtual Box', self.cmdDisconnect)
+            commands['reconnect'] = ('Reconnects to a remote Virtual Box', self.cmdReconnect)
         return commands  
      
     def run(self):
+        if self.active is None:
+            print "No VBoxWebServer to connect to."
+            return 
         while True:
             try:
                 cmd = raw_input(g_prompt)
@@ -244,22 +253,20 @@ class Interpret():
         
         vbox = self.active.info['vbox']
         mach = vbox.findMachine(machname)
+        const = self.active.info['const']
         session = self.active.info['mgr'].getSessionObject(vbox)
         mach.lockMachine(session, self.active.info['const'].LockType_Shared)
         
-        import getpass
         user = raw_input("User: ")
         password = raw_input("Password: ")
         guestSession = session.console.guest.createSession(user, password, '', '')
-        print guestSession.waitFor(1, 10000)
-        print guestSession.pathStyle
+        guestSession.waitFor(1, 10000)
         print "Starting process %s with args %s"%(executable, str(guestargs))
         proc = guestSession.processCreate(executable, guestargs, None, None, 0)
-        proc.waitFor(1,10000)
-        print "Process %s started"%str(proc.PID)
-        proc.waitFor(2,10000)
-        print "Process exited with exit code " + str(proc.exitCode)
-        return 0
+        proc.waitFor(1, 10000)
+        print "Process started with PID " + str(proc.PID)
+        proc.waitFor(2, 10000)
+        print "Process ended with exit code " + str(proc.exitCode)
         
     def cmdAddHost(self, args):
         if len(args) < 2 or len(args) > 4:
@@ -302,8 +309,12 @@ class Interpret():
             print "Wrong arguments for switchhost"
             return 0
         url = args[1]
-        self.active = self.envs[url]
-        self.cmdReconnect([""])
+        try:
+            self.active = self.envs[url]
+        except KeyError:
+            print "Host does not exist"
+        else:
+            self.cmdReconnect([""])
         return 0
     
     def cmdStartVM(self, args):
@@ -361,6 +372,7 @@ class Interpret():
             return 0
         for key, value in self.active.info.items():
             print key + ": " + str(value)
+        return 0
             
     def runCommandWithArgs(self, args):
         cmd = args[0]
@@ -386,5 +398,32 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-w", "--webservice", dest="style", action="store_const", const="WEBSERVICE", help = "Use webservice")
     args = parser.parse_args(sys.argv[1:])
-    interpret = Interpret(args)
+    
+    params = None
+    #for arg1, option in vars(args).items():
+    #    print arg1 + ": " + str(option)
+    #    opts = option.split(',')
+    #    for opt_line in opts:
+    #        opt, arg = opt_line.split('=')
+            
+    params = None
+    try:
+        vboxMgr = VirtualBoxManager(args.style, params)
+    except:
+        print "Vbox not running, exiting."
+        exit(0)
+    url = "http://localhost:18083"
+    env = Environment({'mgr' : vboxMgr,
+                       'vbox': vboxMgr.vbox,
+                       'const': vboxMgr.constants,
+                       'remote': vboxMgr.remote
+                       })
+    if env.info['remote']:
+        env.info['remoteinfo'] = [url, "", ""]
+    interpret = Interpret(args.style)
+    interpret.addEnv(env)
+    interpret.setActiveEnv(url)
     interpret.run()
+    # Run ended
+    for env in interpret.envs.values():
+        del env.info['mgr']
