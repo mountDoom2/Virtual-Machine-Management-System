@@ -267,6 +267,7 @@ class Interpret():
         print "Process started with PID " + str(proc.PID)
         proc.waitFor(2, 10000)
         print "Process ended with exit code " + str(proc.exitCode)
+        return 0
         
     def cmdAddHost(self, args):
         if len(args) < 2 or len(args) > 4:
