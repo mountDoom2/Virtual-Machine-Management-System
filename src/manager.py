@@ -213,16 +213,30 @@ class Interpret():
         if len(args) > 0:
             print "Too much arguments for groups"
             return 0
+        if not len(self.groups):
+            print "No existing groups found. Use command 'creategroup' to create one"
         for groupName, group in self.groups.items():
             print groupName
             machines = group.getMachines()
+            if not len(machines):
+                print 4*" " + "empty"
+                continue
             for host, machines in machines.items():
                 print 4 * " " + host
                 for machname, credentials in machines.items():
                     print 8 * " " + machname + " (" + str(credentials['user']) + ", " + str(credentials['password']) + ')'
-            #for machname in machnames:
-            #    print 4 * " " + machname
+
         return 0
+    
+    def cmdCreateGroup(self, args):
+        if len(args) != 1:
+            print "Wrong arguments for creategroup command. Usage: creategroup <groupname>"
+        groupname = args[0] 
+        group = Group(groupname)
+        self.groups[groupname] = group
+        
+        return 0
+        
     def cmdSleep(self, args):
         if len(args) != 1:
             print "Wrong arguments for sleep. Usage: sleep <time>"
@@ -258,6 +272,7 @@ class Interpret():
                     "gshell": ("Run an interactive shell on guest", self.cmdGshell),
                     "sleep": ("Sleep for a period of time", self.cmdSleep),
                     "groups": ("Print existing groups", self.cmdGroups),
+                    "creategroup": ("Print existing groups", self.cmdCreateGroup),
                     "exit": ("Quit program", self.cmdExit),
                    }
         if self.isRemote:
@@ -410,8 +425,9 @@ class Interpret():
             print "Wrong arguments for guest. Usage: <machine_name|uuid>"
             return 0
         machname = args[0]
-        executable = r'C:\Codasip\MinGW\bin\sh.exe'#msys.bat'
-        #executable = r'C:\Windows\System32\cmd.exe' if os.name == 'nt' else '/bin/sh'
+        #executable = r'C:\Codasip\MinGW\bin\sh.exe'#
+        executable = r'C:\Windows\System32\cmd.exe'
+        #executable = r'/bin/sh'
         guestargs = args[1:]
 
         vbox = self.active.info['vbox']
@@ -428,18 +444,17 @@ class Interpret():
         while True:
             data = proc.read(1, 8192, 10000)
             print "stdout: " + str(data)
-            if proc.status == self.active.info.get('const'):
-                print "Process ended"
+            if proc.status == self.active.info.get('const').ProcessStatus_TerminatedNormally:
+                print "Exit code: " + str(proc.exitCode)
                 break
             inp = raw_input("cmd>")
             written = proc.write(0, 0, inp + '\n', 10000)            
             data = proc.read(2, 8192, 10000)
             print "sterr: " + str(data)
-            print proc.status
-        print proc.waitFor(2, 10000) # Wait for terminate
-        print proc.exitCode
+        
+        proc.waitFor(2, 10000) # Wait for terminate
+        guestSession.close()
         session.unlockMachine()
-        session.close()
         return 0
         
     def cmdAddHost(self, args):
@@ -628,7 +643,7 @@ if __name__ == "__main__":
                            'const': vboxMgr.constants,
                            'remote': vboxMgr.remote
                            })
-        if env.info['remote']:
+        if env.info.get('remote'):
             url = "http://localhost:18083"
             if params is not None:
                 env.info['remoteinfo'] = [params['url'], params['user'], params['password']]
@@ -636,7 +651,7 @@ if __name__ == "__main__":
                 env.info['remoteinfo'] = [url, "", ""]
     except:
         print "VBoxWebsrv is not running on localhost."
-        
+
     interpret = Interpret(args.style)
     if (args.config_file):
         interpret.loadConfiguration(args.config_file)
