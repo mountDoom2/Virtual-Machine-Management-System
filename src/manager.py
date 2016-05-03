@@ -295,8 +295,14 @@ class Interpret():
                     break
             except KeyboardInterrupt:
                 print "Type quit to exit application"
+                break
+            except EOFError:
+                print "Violently killed, exiting"
+                break
             except Exception:
                 traceback.print_exc()
+                break
+                
                          
     def progressBar(self, progress, update_time=1000):
         try:
