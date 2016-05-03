@@ -16,24 +16,39 @@ from modules.errors import *
 from modules.globals import *
 
 class Group():
-    def __init__(self, name, machines = {}):
+    def __init__(self, name):
         self.name = name
-        self.machines = machines
+        self.machines = {}
         return
     
-    def addMachine(self, host, machname):
+    def addMachine(self, host, machname, user=None, password=None):
+        if ((user is None and password is not None) or 
+            (user is not None and password is None)):
+            print "Must user or password"
+            return
+        credentials = {'user': user, 'password': password}
+        
         if host not in self.machines.keys():
-            self.machines[host] = [machname]
-        elif machname not in self.machines[host]:
-            self.machines[host].append(machname)
+            self.machines[host] = {machname: credentials}
+        else:
+            self.machines[host][machname] = credentials
+        #elif machname not in self.machines[host]:
+        #    self.machines[host].append(machname)
+        #    self.machines[host][machname] = credentials
         return
     
     def removeMachine(self, host, machname):
-        if host in self.machines.keys() and machname in self.machines[host]:       
-            self.machines[host].remove(machname)
-        if not len(self.machines[host]):
-            del self.machines[host]
+        if host in self.machines.keys() and machname in self.machines[host].key():       
+            del self.machines[host][machname]
+            if not len(self.machines[host]):
+                del self.machines[host]
         return
+    
+    def getName(self):
+        return self.name
+    
+    def getMachines(self):
+        return self.machines
 
 class Environment():
     def __init__(self, info, name=None):
@@ -46,13 +61,30 @@ class Environment():
         else:
             self.name = name
         
+        self.machines = {}
+    
+    def addMachine(self, machname, user=None, password=None):
+        if ((user is None and password is not None) or 
+            (user is not None and password is None)):
+            print "Must user or password"
+            return
+        self.machines[machname] = {'user': user, 'password': password}
+    
+    def removeMachine(self, machname):
+        if machname in self.machines.keys():
+            del self.machines[machname]
+        
 class Interpret():
     def __init__(self, style):       
         self.envs = {}
         self.isRemote = (style == 'WEBSERVICE')
         self.commands = self.createCommands()
         self.active = None
+        self.groups = {}
     
+    def getGroup(self, name):
+        return self.groups[name] if name in self.groups.keys() else None
+        
     def addEnv(self, env):
         if not isinstance(env, Environment):
             print "Environment object invalid"
@@ -62,6 +94,59 @@ class Interpret():
         else:
             url = "http://localhost:18083"
         self.envs[url] = env
+    
+    def getCredentials(self):
+        user = raw_input("User: ")
+        password = raw_input("Password: ")
+        return user, password
+
+    def loadConfiguration(self, filename):
+        #try:
+        lineNum = -1
+        with open(filename, 'r') as conf_file:
+
+            for line in conf_file:
+                lineNum += 1
+                if len(line) < 2: # Empty line, do not count newline chars
+                    continue
+                split = line.split()
+                if not len(split):
+                    continue
+                params = {'group': None,
+                          'user': None,
+                          'password': None
+                          }
+                host, machname = split[0].split('/')
+                for element in split[1:]:
+                    paramName, paramVal = element.split('=')
+                    # Accept only first occurence of parameter
+                    if paramName in params.keys():
+                        if params[paramName] is None:
+                            params[paramName] = paramVal
+                        else:
+                            print "Parameter '%s' already set, ignoring this one. (line %d)"%(paramName, lineNum)
+                    else:
+                        print "Undefined parameter '%s' on line %d"%(paramName, lineNum)
+                        return
+                if params['group'] is not None:
+                    if self.getGroup(params['group']) is None:
+                        group = Group(params['group'])
+                        self.groups[params['group']] = group
+                    self.groups[params['group']].addMachine(host, machname, params['user'], params['password'])
+                        
+        #except IOError:
+        #pass
+        #except IndexError:
+        #except ValueError: # Nebyl zadany host nebo nazev stroje
+        #    self.clearConfiguration()
+        #    print "Error while loading configuration"
+        return
+
+    def storeConfiguration(self, dest):
+        return
+    
+    def clearConfiguration(self, filename):
+        return    
     
     def setActiveEnv(self, url):
         if url not in self.envs.keys():
@@ -124,6 +209,20 @@ class Interpret():
         session.console.sleepButton()
         return 0
     
+    def cmdGroups(self, args):
+        if len(args) > 0:
+            print "Too much arguments for groups"
+            return 0
+        for groupName, group in self.groups.items():
+            print groupName
+            machines = group.getMachines()
+            for host, machines in machines.items():
+                print 4 * " " + host
+                for machname, credentials in machines.items():
+                    print 8 * " " + machname + " (" + str(credentials['user']) + ", " + str(credentials['password']) + ')'
+            #for machname in machnames:
+            #    print 4 * " " + machname
+        return 0
     def cmdSleep(self, args):
         if len(args) != 1:
             print "Wrong arguments for sleep. Usage: sleep <time>"
@@ -142,7 +241,7 @@ class Interpret():
     def createCommands(self):
         commands = {"help": ("Prints this help", self.cmdHelp),
                     "createvm": ("Create a virtual machine", self.cmdCreateVM),
-                    "removevm": ("Create a virtual machine", self.cmdRemoveVM),
+                    "removevm": ("Remove a virtual machine", self.cmdRemoveVM),
                     "startvm": ("Start virtual machine", self.cmdStartVM),
                     "reset": ("Restart virtual machine", self.cmdRestartVM),
                     "pause": ("Pause virtual machine", self.cmdPause),            
@@ -158,6 +257,7 @@ class Interpret():
                     "gcmd": ("Execute a command on guest", self.cmdGcmd),
                     "gshell": ("Run an interactive shell on guest", self.cmdGshell),
                     "sleep": ("Sleep for a period of time", self.cmdSleep),
+                    "groups": ("Print existing groups", self.cmdGroups),
                     "exit": ("Quit program", self.cmdExit),
                    }
         if self.isRemote:
@@ -230,24 +330,19 @@ class Interpret():
         try:
             self.active.info['mgr'].platform.disconnect()
         except: # Do nothing if already disconnected
-            print "Disconnected, reconnection makes sense"
             pass 
         vbox = self.active.info['mgr'].platform.connect(url, user, password)
         self.active.info['vbox'] = vbox
         return 0
     
     def cmdDisconnect(self, args):
-        print "a"
         if len(args) != 0:
             print "Too many arguments for disconnect"
             return 0
         try:
             self.active.info['mgr'].platform.disconnect()
-            print "b"
         except:
-            print "Already disconnected"
             pass
-        print "c"
         return 0
     
     def cmdHelp(self, args):
@@ -315,7 +410,8 @@ class Interpret():
             print "Wrong arguments for guest. Usage: <machine_name|uuid>"
             return 0
         machname = args[0]
-        executable = r'C:\Windows\System32\cmd.exe' if os.name == 'nt' else '/bin/sh'
+        executable = r'C:\Codasip\MinGW\bin\sh.exe'#msys.bat'
+        #executable = r'C:\Windows\System32\cmd.exe' if os.name == 'nt' else '/bin/sh'
         guestargs = args[1:]
 
         vbox = self.active.info['vbox']
@@ -323,8 +419,7 @@ class Interpret():
         session = self.active.info['mgr'].getSessionObject(vbox)
         mach.lockMachine(session, self.active.info['const'].LockType_Shared)
         
-        user = raw_input("User: ")
-        password = raw_input("Password: ")
+        user, password = self.getCredentials()
         guestSession = session.console.guest.createSession(user, password, '', '')
         guestSession.waitFor(1, 10000) # Wait for session to start
         proc = guestSession.processCreate(executable, guestargs, None, [5, 6], 0)
@@ -333,6 +428,9 @@ class Interpret():
         while True:
             data = proc.read(1, 8192, 10000)
             print "stdout: " + str(data)
+            if proc.status == self.active.info.get('const'):
+                print "Process ended"
+                break
             inp = raw_input("cmd>")
             written = proc.write(0, 0, inp + '\n', 10000)            
             data = proc.read(2, 8192, 10000)
@@ -341,6 +439,7 @@ class Interpret():
         print proc.waitFor(2, 10000) # Wait for terminate
         print proc.exitCode
         session.unlockMachine()
+        session.close()
         return 0
         
     def cmdAddHost(self, args):
@@ -505,6 +604,7 @@ class Interpret():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("-c", "--config-file", dest="config_file", help = "Configuration file")
     parser.add_argument("-w", "--webservice", dest="style", action="store_const", const="WEBSERVICE", help = "Use webservice")
     parser.add_argument("-o", "--opts", dest="opts", help = "Additional command line parameters")
     args = parser.parse_args(sys.argv[1:])
@@ -538,6 +638,8 @@ if __name__ == "__main__":
         print "VBoxWebsrv is not running on localhost."
         
     interpret = Interpret(args.style)
+    if (args.config_file):
+        interpret.loadConfiguration(args.config_file)
     if 'env' in locals():
         interpret.addEnv(env)
         interpret.setActiveEnv(url)
