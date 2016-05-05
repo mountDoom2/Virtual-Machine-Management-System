@@ -52,20 +52,19 @@ class Group():
 
 class Environment():
     def __init__(self, values):
-        if not values:
+        if values is None:
             values = {}
         elif not isinstance(values, dict):
             raise EnvironmentException("Given values are not a dictionary object")
 
-        self.hostname = values.get('hostname')
+        self.hostname = values.get('hostname', 'localhost')
         self.port = values.get('port', 18083)
         self.username = values.get('username', "")
         self.password = values.get('password', "")
         self.name = values.get('name') if (values.get('name') and len(values.get('name'))) else self.hostname
-        self.style = 'WEBSERVICE' if self.hostname else None
+        self.style = values.get('style')
         self.remote = (self.style == 'WEBSERVICE')
-                
-         
+
         self.mgr = None
         self.vbox = None
         self.const = None
@@ -677,9 +676,8 @@ if __name__ == "__main__":
     parser.add_argument("-o", "--opts", dest="opts", help = "Additional command line parameters")
     args = parser.parse_args(sys.argv[1:])
     
-    params = None
+    params = {'style' : args.style}
     if args.opts is not None:
-        params = {}
         try:
             for opt in args.opts.split(','):
                 paramName = opt.split('=')[0]
@@ -690,10 +688,11 @@ if __name__ == "__main__":
             sys.exit(1)
     
     try:
-        if params is not None:
+        if args.opts:
             params['hostname'] = params.get('hostname')
             params['user'] = params.get('user', "")
             params['password'] = params.get('password', "")    
+        print params
         env = Environment(params)
     except EnvironmentError as e:
         print str(e) # print error
