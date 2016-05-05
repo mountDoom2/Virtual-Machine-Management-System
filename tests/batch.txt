@@ -1,0 +1,4 @@
+load C:\\Users\\mount_000\\git\\Virtual-Machine-Management-System\\tests\\config.txt
+start group1
+sleep 30
+restart group1

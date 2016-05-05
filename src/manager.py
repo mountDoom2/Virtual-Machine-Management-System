@@ -62,7 +62,7 @@ class Environment():
         self.port = values.get('port', 18083)
         self.username = values.get('username', "")
         self.password = values.get('password', "")
-        #self.name = values.get('name') if (values.get('name') and len(values.get('name'))) else self.hostname
+        self.name = values.get('name') if (values.get('name') and len(values.get('name'))) else self.hostname
         self.style = values.get('style')
         self.remote = (self.style == 'WEBSERVICE')
         if self.username:
@@ -303,6 +303,7 @@ class Interpret():
     def cmdCreateGroup(self, args):
         if len(args) != 1:
             print "Wrong arguments for creategroup command. Usage: creategroup <groupname>"
+            return 0
         groupname = args[0] 
         group = Group(groupname)
         if not group:
@@ -314,6 +315,7 @@ class Interpret():
     def cmdRemoveGroup(self, args):
         if len(args) != 1:
             print "Wrong arguments for creategroup command. Usage: removegroup <groupname>"
+            return 0
         groupname = args[0] 
         group = Group(groupname)
         if group:
@@ -386,8 +388,8 @@ class Interpret():
         commands = {"help": ("Prints this help", "local", self.cmdHelp),
                     "createvm": ("Create a virtual machine", "network", self.cmdCreateVM),
                     "removevm": ("Remove a virtual machine", "network",self.cmdRemoveVM),
-                    "startvm": ("Start virtual machine", "network",self.cmdStartVM),
-                    "reset": ("Restart virtual machine", "network",self.cmdRestartVM),
+                    "start": ("Start virtual machine", "network",self.cmdStartVM),
+                    "restart": ("Restart virtual machine", "network",self.cmdRestartVM),
                     "pause": ("Pause virtual machine", "network",self.cmdPause),            
                     "resume": ("Resume virtual machine", "network",self.cmdResume),
                     "poweroff": ("Power off a virtual machine", "network",self.cmdPowerOff),
@@ -412,12 +414,12 @@ class Interpret():
                     "exit": ("Quit program", "local", self.cmdExit),
                    }
         if self.isRemote:
-            commands["addhost"] = ("Add a new host", self.cmdAddHost)
-            commands["removehost"] = ("Remove host", self.cmdRemoveHost)
-            commands['switchhost'] = ('Switch to another host', self.cmdSwitchHost)
-            commands['connect'] = ('Connect to remote Virtual Box', self.cmdConnect)
-            commands['disconnect'] = ('Disconnect from remote Virtual Box', self.cmdDisconnect)
-            commands['reconnect'] = ('Reconnects to a remote Virtual Box', self.cmdReconnect)
+            commands["addhost"] = ("Add a new host", "network", self.cmdAddHost)
+            commands["removehost"] = ("Remove host", "network", self.cmdRemoveHost)
+            commands['switchhost'] = ('Switch to another host', "network", self.cmdSwitchHost)
+            commands['connect'] = ('Connect to remote Virtual Box', "network", self.cmdConnect)
+            commands['disconnect'] = ('Disconnect from remote Virtual Box', "network", self.cmdDisconnect)
+            commands['reconnect'] = ('Reconnects to a remote Virtual Box', "network", self.cmdReconnect)
         return commands  
      
     def run(self):
