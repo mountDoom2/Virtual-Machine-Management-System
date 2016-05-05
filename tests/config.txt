@@ -1,0 +1,11 @@
+codasip1/Debian8-64
+
+
+codasip2/Debian8-64 group=group1
+codasip3/Debian8-64 group=group2
+
+
+
+codasip3/Debian8-32 group=group1 user=root password=152
+
+

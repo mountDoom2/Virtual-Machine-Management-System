@@ -51,15 +51,37 @@ class Group():
         return self.machines
 
 class Environment():
-    def __init__(self, info, name=None):
-        self.info = info
-        if name is None:
-            if self.info.get('url'):
-                self.name = re.sub(r"http://(.*?):.*", r'\1', self.info['url'])
-            else:
-                self.name = ""
-        else:
-            self.name = name
+    def __init__(self, values):
+        if values and not isinstance(values, dict):
+            raise EnvironmentException("Given values are not a dictionary object")
+        if not values:
+            values = {}
+            
+        self.hostname = values.get('hostname')
+        self.port = values.get('port', 18083)
+        self.username = values.get('username', "")
+        self.password = values.get('password', "")
+        self.name = values.get('name') if (values.get('name') and len(values.get('name'))) else self.hostname
+        self.style = 'WEBSERVICE' if self.hostname else None
+        self.remote = (self.style == 'WEBSERVICE')
+                
+         
+        self.mgr = None
+        self.vbox = None
+        self.const = None
+        params = None
+        if self.remote:
+            self.url = 'http://' + self.hostname + ':' + str(self.port)        
+            params = {'url': self.url,
+                      'user': self.username,
+                      'password': self.password,
+                      }
+
+        mgr = VirtualBoxManager(self.style, params)
+        self.mgr = mgr
+        self.vbox = mgr.vbox
+        self.const = mgr.constants
+        self.remote = mgr.remote
         
         self.machines = {}
     
@@ -89,11 +111,8 @@ class Interpret():
         if not isinstance(env, Environment):
             print "Environment object invalid"
             return
-        if 'remoteinfo' in env.info.keys():
-            url = env.info['remoteinfo'][0]
-        else:
-            url = "http://localhost:18083"
-        self.envs[url] = env
+        
+        self.envs[env.name] = env
     
     def getCredentials(self):
         user = raw_input("User: ")
@@ -219,12 +238,14 @@ class Interpret():
             print groupName
             machines = group.getMachines()
             if not len(machines):
-                print 4*" " + "empty"
+                print 4*" " + "<empty>"
                 continue
             for host, machines in machines.items():
                 print 4 * " " + host
                 for machname, credentials in machines.items():
-                    print 8 * " " + machname + " (" + str(credentials['user']) + ", " + str(credentials['password']) + ')'
+                    username = str(credentials.get('user', '<empty>'))
+                    password = str(credentials.get('password', '<empty>'))
+                    print 8 * " " + machname + " (" + username + ", " + password + ')'
 
         return 0
     
@@ -234,9 +255,31 @@ class Interpret():
         groupname = args[0] 
         group = Group(groupname)
         self.groups[groupname] = group
-        
         return 0
         
+    def cmdAddToGroup(self, args):
+        if len(args) < 3 or len(args) > 5:
+            print "Wrong arguments for addtogroup command. Usage: addtogroup <groupname> <hostname> <machine> [username] [password]"
+            return 0
+        groupname = args[0]
+        hostname = args[1]
+        machname = args[2]
+        username = args[3] if len(args) > 3 else None
+        password = args[4] if len(args) > 4 else None
+        
+        print self.envs.keys()
+        if hostname not in self.envs.keys():
+            print "Unknown host"
+            return 0
+        
+        if groupname not in self.groups.keys():
+            print "Creating a new group"
+            self.cmdCreateGroup(groupname)
+            
+        group = self.groups.get(groupname)
+        group.addMachine(hostname, machname, username, password)
+        return 0
+    
     def cmdSleep(self, args):
         if len(args) != 1:
             print "Wrong arguments for sleep. Usage: sleep <time>"
@@ -245,10 +288,10 @@ class Interpret():
         return 0
                 
     def lockSession(self, machname):
-        vbox = self.active.info['vbox']
-        const = self.active.info['const']
+        vbox = self.active.vbox
+        const = self.active.const
         machine = vbox.findMachine(machname)
-        session = self.active.info['mgr'].getSessionObject(vbox)
+        session = self.active.mgr.getSessionObject(vbox)
         machine.lockMachine(session, const.LockType_Shared)
         return machine, session
         
@@ -272,7 +315,8 @@ class Interpret():
                     "gshell": ("Run an interactive shell on guest", self.cmdGshell),
                     "sleep": ("Sleep for a period of time", self.cmdSleep),
                     "groups": ("Print existing groups", self.cmdGroups),
-                    "creategroup": ("Print existing groups", self.cmdCreateGroup),
+                    "creategroup": ("Create a new group", self.cmdCreateGroup),
+                    "addtogroup": ("Add machine to existing group", self.cmdAddToGroup),
                     "exit": ("Quit program", self.cmdExit),
                    }
         if self.isRemote:
@@ -290,6 +334,7 @@ class Interpret():
         while True:
             try:
                 cmd = raw_input(g_prompt)
+                print self.active
                 ret = self.runCmd(cmd)
                 if ret != 0:
                     break
@@ -323,45 +368,48 @@ class Interpret():
         return 0
     
     def cmdConnect(self, args):
-        if len(args) < 1 or len(args) > 2:
-            print "Wrong arguments for connect. Usage: connect <hostname> [port]"
+        if len(args) != 1:
+            print "Wrong arguments for connect. Usage: connect <hostname>"
             return 0
         
         host = args[0]
-        port = args[1] if len(args) > 1 else 18083
-        url = "http://" + host + ":" + port
-        if host not in self.envs.keys():
+
+        env = self.envs.get(host)
+        if not env:
             print "Unknown host"
             return 0
-        env = self.envs[host]
-        [url, user, password] = env.info['remoteinfo']
-        vbox = env.info['mgr'].platform.connect(url, user, password)
-        env.info['vbox'] = vbox  
+        
+        url, user, password = env.url, env.username, env.password
+        vbox = env.mgr.platform.connect(url, user, password)
+        env.vbox = vbox  
         return 0
     
     def cmdReconnect(self, args):
-        if len(args) != 0:
-            print "Too many arguments for reconnect"
+        if len(args) > 1:
+            print "Wrong arguments for reconnect command. Usage: reconneect <hostname>"
+            return 0
+        
+        env = self.envs.get(args[0]) if len(args) > 0 else self.active
+        try:
+            url, user, password = env.url, env.username, env.password 
+        except AttributeError, KeyError:
+            print "Trying to reconnect to the unknown host machine"
             return 0
         try:
-            [url, user, password] = self.active.info['remoteinfo'] 
-        except KeyError:
-            print "Trying to recconect to the unknown host machine"
-            return 0
-        try:
-            self.active.info['mgr'].platform.disconnect()
+            env.mgr.platform.disconnect()
         except: # Do nothing if already disconnected
             pass 
-        vbox = self.active.info['mgr'].platform.connect(url, user, password)
-        self.active.info['vbox'] = vbox
+        vbox = env.mgr.platform.connect(url, user, password)
+        env.vbox = vbox
         return 0
     
     def cmdDisconnect(self, args):
-        if len(args) != 0:
-            print "Too many arguments for disconnect"
+        if len(args) > 1:
+            print "Wrong arguments for disconnect. Usage: disconnect [hostname]"
             return 0
+        env = self.envs.get(args[0]) if len(args) > 0 else self.active
         try:
-            self.active.info['mgr'].platform.disconnect()
+            env.mgr.platform.disconnect()
         except:
             pass
         return 0
@@ -375,16 +423,16 @@ class Interpret():
             print "Wrong arguments for createvm. Usage: createvm <name>"
         name = args[0]
         
-        mach = self.active.info['vbox'].createMachine("", name, None, "Ubuntu_64", 1)
+        mach = self.active.vbox.createMachine("", name, None, "Ubuntu_64", 1)
         mach.saveSettings()
-        self.active.info['vbox'].registerMachine(mach)
+        self.active.vbox.registerMachine(mach)
         return 0
 
     def cmdRemoveVM(self, args):
         if len(args) != 1:
             print "Wrong arguments for removevm. Usage: removevm <name>"
         name = args[0]
-        machine = self.active.info['vbox'].findMachine(name)
+        machine = self.active.vbox.findMachine(name)
         flag = 3
         medias = machine.unregister(flag)
         progress = machine.deleteConfig(medias)
@@ -402,10 +450,10 @@ class Interpret():
         executable = args[1]
         guestargs = args[1:]
         
-        vbox = self.active.info['vbox']
+        vbox = self.active.vbox
         mach = vbox.findMachine(machname)
-        session = self.active.info['mgr'].getSessionObject(vbox)
-        mach.lockMachine(session, self.active.info['const'].LockType_Shared)
+        session = self.active.mgr.getSessionObject(vbox)
+        mach.lockMachine(session, self.active.const.LockType_Shared)
         
         user = raw_input("User: ")
         password = raw_input("Password: ")
@@ -436,10 +484,10 @@ class Interpret():
         #executable = r'/bin/sh'
         guestargs = args[1:]
 
-        vbox = self.active.info['vbox']
+        vbox = self.active.vbox
         mach = vbox.findMachine(machname)
-        session = self.active.info['mgr'].getSessionObject(vbox)
-        mach.lockMachine(session, self.active.info['const'].LockType_Shared)
+        session = self.active.mgr.getSessionObject(vbox)
+        mach.lockMachine(session, self.active.const.LockType_Shared)
         
         user, password = self.getCredentials()
         guestSession = session.console.guest.createSession(user, password, '', '')
@@ -450,7 +498,7 @@ class Interpret():
         while True:
             data = proc.read(1, 8192, 10000)
             print "stdout: " + str(data)
-            if proc.status == self.active.info.get('const').ProcessStatus_TerminatedNormally:
+            if proc.status == self.active.const.ProcessStatus_TerminatedNormally:
                 print "Exit code: " + str(proc.exitCode)
                 break
             inp = raw_input("cmd>")
@@ -528,8 +576,8 @@ class Interpret():
             print "Wrong arguments for startvm. Usage: startvm <machine_name>"
             return 0
         name = args[0]
-        machine = self.active.info['vbox'].findMachine(name)
-        session = self.active.info['mgr'].getSessionObject(self.active.info['vbox'])
+        machine = self.active.vbox.findMachine(name)
+        session = self.active.mgr.getSessionObject(self.active.vbox)
         progress = machine.launchVMProcess(session, "gui", "")
         self.progressBar(progress, 100)
         
@@ -546,7 +594,7 @@ class Interpret():
             format = args[2]
         else:
             format = "ovf-1.0"
-        vbox = self.active.info['vbox']
+        vbox = self.active.vbox
         appliance = vbox.createAppliance()
         machine = vbox.findMachine(machine_name)
         desc = machine.exportTo(appliance, '')
@@ -559,7 +607,7 @@ class Interpret():
         if len(args) != 1:
             print "Wrong arguments for importvm. Usage: importvm <path_to_image>"
             return 0
-        vbox = self.active.info['vbox']
+        vbox = self.active.vbox
         import_file = args[0]
         appliance = vbox.createAppliance()
         progress = appliance.read(import_file)
@@ -576,15 +624,14 @@ class Interpret():
         if len(args) != 0:
             print "Wrong arguments for host"
             return 0
-        for key, value in self.active.info.items():
-            print key + ": " + str(value)
         return 0
+    
     def cmdListVms(self, args):
         if len(args) != 0:
             print "Wrong arguments for listvms"
             return 0
-        vbox = self.active.info['vbox']
-        machines = self.active.info['mgr'].getArray(vbox, 'machines')
+        vbox = self.active.vbox
+        machines = self.active.mgr.getArray(vbox, 'machines')
         for mach in machines:
             print str(mach.name) + " " + str(mach.state) + " " + str(mach.OSTypeId)
         return 0
@@ -593,8 +640,8 @@ class Interpret():
         if len(args) != 0:
             print "Wrong arguments for listrunningvms"
             return 0
-        vbox = self.active.info['vbox']
-        machines = self.active.info['mgr'].getArray(vbox, 'machines')
+        vbox = self.active.vbox
+        machines = self.active.mgr.getArray(vbox, 'machines')
         for mach in machines:
             state = mach.state
             if state in ['FirstOnline', 'LastOnline']:
@@ -643,29 +690,24 @@ if __name__ == "__main__":
             sys.exit(1)
     
     try:
-        vboxMgr = VirtualBoxManager(args.style, params)
-        env = Environment({'mgr' : vboxMgr,
-                           'vbox': vboxMgr.vbox,
-                           'const': vboxMgr.constants,
-                           'remote': vboxMgr.remote
-                           })
-        if env.info.get('remote'):
-            url = "http://localhost:18083"
-            if params is not None:
-                env.info['remoteinfo'] = [params['url'], params['user'], params['password']]
-            else:
-                env.info['remoteinfo'] = [url, "", ""]
-    except:
-        print "VBoxWebsrv is not running on localhost."
+        if params is not None:
+            params['hostname'] = params.get('hostname')
+            params['user'] = params.get('user', "")
+            params['password'] = params.get('password', "")    
+        env = Environment(params)
+    except EnvironmentError as e:
+        print str(e) # print error
+        sys.exit(1)
+    
 
     interpret = Interpret(args.style)
     if (args.config_file):
         interpret.loadConfiguration(args.config_file)
     if 'env' in locals():
         interpret.addEnv(env)
-        interpret.setActiveEnv(url)
+        interpret.setActiveEnv(env.name)
     interpret.run()
     
     # Interpret finished
     for env in interpret.envs.values():
-        del env.info['mgr']
+        del env.mgr
