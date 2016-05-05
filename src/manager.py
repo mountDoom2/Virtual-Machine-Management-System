@@ -52,11 +52,11 @@ class Group():
 
 class Environment():
     def __init__(self, values):
-        if values and not isinstance(values, dict):
-            raise EnvironmentException("Given values are not a dictionary object")
         if not values:
             values = {}
-            
+        elif not isinstance(values, dict):
+            raise EnvironmentException("Given values are not a dictionary object")
+
         self.hostname = values.get('hostname')
         self.port = values.get('port', 18083)
         self.username = values.get('username', "")
