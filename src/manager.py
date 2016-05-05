@@ -1,4 +1,5 @@
 from vboxapi import *
+import copy
 import argparse
 import os
 from os import path
@@ -61,10 +62,14 @@ class Environment():
         self.port = values.get('port', 18083)
         self.username = values.get('username', "")
         self.password = values.get('password', "")
-        self.name = values.get('name') if (values.get('name') and len(values.get('name'))) else self.hostname
+        #self.name = values.get('name') if (values.get('name') and len(values.get('name'))) else self.hostname
         self.style = values.get('style')
         self.remote = (self.style == 'WEBSERVICE')
-
+        if self.username:
+            self.prompt = self.username + '@' + self.name + '>'
+        else:
+            self.prompt = self.name + '>'
+        
         self.mgr = None
         self.vbox = None
         self.const = None
@@ -94,17 +99,20 @@ class Environment():
     def removeMachine(self, machname):
         if machname in self.machines.keys():
             del self.machines[machname]
+    def getMachines(self):
+        return self.machines
         
 class Interpret():
     def __init__(self, style):       
         self.envs = {}
         self.isRemote = (style == 'WEBSERVICE')
         self.commands = self.createCommands()
+
         self.active = None
         self.groups = {}
     
     def getGroup(self, name):
-        return self.groups[name] if name in self.groups.keys() else None
+        return self.groups.get(name)
         
     def addEnv(self, env):
         if not isinstance(env, Environment):
@@ -113,57 +121,101 @@ class Interpret():
         
         self.envs[env.name] = env
     
-    def getCredentials(self):
+    def getCredentials(self, machname):
+        if machname in self.active.getMachines().keys():
+            user = self.active.getMachines()[machname]['username']
+            password = self.active.getMachines()[machname]['password']
+            if len(user) and len(password):
+                return user, password
+
+        for group in self.groups.values():
+            for host, machines in group.getMachines().items():
+                if host != self.active.name:
+                    continue                            
+                for mname, credentials in machines.items():
+                    print credentials
+                    if machname == mname:
+                        user = credentials['user']
+                        password = credentials['password']
+                        if len(user) and len(password):
+                            return user, password
         user = raw_input("User: ")
         password = raw_input("Password: ")
         return user, password
 
     def loadConfiguration(self, filename):
-        #try:
-        lineNum = -1
-        with open(filename, 'r') as conf_file:
-
-            for line in conf_file:
-                lineNum += 1
-                if len(line) < 2: # Empty line, do not count newline chars
-                    continue
-                split = line.split()
-                if not len(split):
-                    continue
-                params = {'group': None,
-                          'user': None,
-                          'password': None
-                          }
-                host, machname = split[0].split('/')
-                for element in split[1:]:
-                    paramName, paramVal = element.split('=')
-                    # Accept only first occurence of parameter
-                    if paramName in params.keys():
-                        if params[paramName] is None:
-                            params[paramName] = paramVal
+        try:
+            backupEnvs = copy.copy(self.envs) # Backup current state in case of error
+            backupGroups = copy.copy(self.groups)
+            lineNum = 0
+            with open(filename, 'r') as conf_file:
+        
+                for line in conf_file:
+                    lineNum += 1
+                    if len(line) < 3: # Empty line, do not count newline chars (\r\n)
+                        continue
+                    split = line.split()
+                    if not len(split):
+                        continue
+                    params = {'group': None,
+                              'user': None,
+                              'password': None
+                              }
+                    host, machname = split[0].split('/')
+                    for element in split[1:]:
+                        paramName, paramVal = element.split('=')
+                        # Accept only first occurence of parameter
+                        if paramName in params.keys():
+                            if params[paramName] is None:
+                                params[paramName] = paramVal
+                            else:
+                                print "Parameter '%s' already set, ignoring this one. (line %d)"%(paramName, lineNum)
                         else:
-                            print "Parameter '%s' already set, ignoring this one. (line %d)"%(paramName, lineNum)
-                    else:
-                        print "Undefined parameter '%s' on line %d"%(paramName, lineNum)
-                        return
-                if params['group'] is not None:
-                    if self.getGroup(params['group']) is None:
-                        group = Group(params['group'])
-                        self.groups[params['group']] = group
-                    self.groups[params['group']].addMachine(host, machname, params['user'], params['password'])
-                        
-        #except IOError:
-        #pass
-        #except IndexError:
-        #except ValueError: # Nebyl zadany host nebo nazev stroje
-        #    self.clearConfiguration()
-        #    print "Error while loading configuration"
+                            print "Undefined parameter '%s' on line %d"%(paramName, lineNum)
+                            continue
+                    if params['group'] is not None:
+                        if self.getGroup(params['group']) is None:
+                            group = Group(params['group'])
+                            self.groups[params['group']] = group
+                        self.groups[params['group']].addMachine(host, machname, params['user'], params['password'])               
+        except IOError:
+            print "Could not open or read configuration file"
+        except (IndexError, ValueError): # Missing host or machine name
+            print "Error while loading configuration on line %d, restoring the state before loading configuration file"%lineNum
+            self.clearConfiguration()
+            self.envs = backupEnvs
+            self.groups = backupGroups
         return
 
-    def storeConfiguration(self, dest):
+    def saveConfiguration(self, dest):
+        try:
+            fp = open(dest, 'w')
+        except IOError:
+            print "Could not open file to save configuration"
+            return
+        # Save environments
+        for env in self.envs.values():
+            host = env.hostname
+            user = env.username
+            password = env.password
+            
+            for machname, credentials in env.machines:
+                print machname, credentials
+        
+        # Save groups
+        for group in self.groups.values():   
+            for host, machines in group.getMachines().items():
+                for machname, credentials in machines.items():
+                    userstr = ("user=" + credentials['user'])
+                    passstr = ("password=" + credentials['password'])
+                    strline = "%s/%s group=%s %s %s\n"%(host, machname, group.getName(), userstr, passstr)
+                    fp.write(strline)
+        fp.close()
         return
     
-    def clearConfiguration(self, filename):
+    def clearConfiguration(self):
+        self.envs = {}
+        self.groups = {}
         return    
     
     def setActiveEnv(self, url):
@@ -253,7 +305,19 @@ class Interpret():
             print "Wrong arguments for creategroup command. Usage: creategroup <groupname>"
         groupname = args[0] 
         group = Group(groupname)
-        self.groups[groupname] = group
+        if not group:
+            self.groups[groupname] = group
+        else:
+            print "Group already exists"
+        return 0
+    
+    def cmdRemoveGroup(self, args):
+        if len(args) != 1:
+            print "Wrong arguments for creategroup command. Usage: removegroup <groupname>"
+        groupname = args[0] 
+        group = Group(groupname)
+        if group:
+            del self.groups[groupname]
         return 0
         
     def cmdAddToGroup(self, args):
@@ -266,7 +330,6 @@ class Interpret():
         username = args[3] if len(args) > 3 else None
         password = args[4] if len(args) > 4 else None
         
-        print self.envs.keys()
         if hostname not in self.envs.keys():
             print "Unknown host"
             return 0
@@ -277,6 +340,31 @@ class Interpret():
             
         group = self.groups.get(groupname)
         group.addMachine(hostname, machname, username, password)
+        return 0
+    
+    def cmdRemoveFromGroup(self, args):
+        if len(args) < 2 or len(args) > 3:
+            print "Wrong arguments for removefromgroup. Usage: removefromgroup <host> <group> [machine]"
+            return 0
+        
+        groupname = args[0]
+        hostarg = args[1]
+        macharg = args[2] if len(args) > 2 else None
+        
+        group = self.getGroup(groupname)
+        if group is None:
+            print "Group '%s' not found"%groupname
+            return 0
+        
+        for hostname, machines in group.getMachines().items():
+            if hostname == hostarg:
+                if macharg is None:
+                    del group.getMachines()[hostname]
+                    break
+                for machname in machines:
+                    if machname == macharg:
+                        del group[group][machname]
+                        return 0
         return 0
     
     def cmdSleep(self, args):
@@ -295,28 +383,33 @@ class Interpret():
         return machine, session
         
     def createCommands(self):
-        commands = {"help": ("Prints this help", self.cmdHelp),
-                    "createvm": ("Create a virtual machine", self.cmdCreateVM),
-                    "removevm": ("Remove a virtual machine", self.cmdRemoveVM),
-                    "startvm": ("Start virtual machine", self.cmdStartVM),
-                    "reset": ("Restart virtual machine", self.cmdRestartVM),
-                    "pause": ("Pause virtual machine", self.cmdPause),            
-                    "resume": ("Resume virtual machine", self.cmdResume),
-                    "poweroff": ("Power off a virtual machine", self.cmdPowerOff),
-                    "powerbutton": ("Power off a virtual machine", self.cmdPowerButton),
-                    "sleepbutton": ("Sleep a virtual machine", self.cmdSleepButton),                            
-                    "exportvm": ("Export virtual machine", self.cmdExportVM),
-                    "importvm": ("Import virtual machine", self.cmdImportVM),
-                    "listvms": ("List virtual machines on current host", self.cmdListVms),
-                    "listrunningvms": ("List running virtual machine on current host", self.cmdListRunningVms),
-                    "host": ("Show info about host", self.cmdHost),
-                    "gcmd": ("Execute a command on guest", self.cmdGcmd),
-                    "gshell": ("Run an interactive shell on guest", self.cmdGshell),
-                    "sleep": ("Sleep for a period of time", self.cmdSleep),
-                    "groups": ("Print existing groups", self.cmdGroups),
-                    "creategroup": ("Create a new group", self.cmdCreateGroup),
-                    "addtogroup": ("Add machine to existing group", self.cmdAddToGroup),
-                    "exit": ("Quit program", self.cmdExit),
+        commands = {"help": ("Prints this help", "local", self.cmdHelp),
+                    "createvm": ("Create a virtual machine", "network", self.cmdCreateVM),
+                    "removevm": ("Remove a virtual machine", "network",self.cmdRemoveVM),
+                    "startvm": ("Start virtual machine", "network",self.cmdStartVM),
+                    "reset": ("Restart virtual machine", "network",self.cmdRestartVM),
+                    "pause": ("Pause virtual machine", "network",self.cmdPause),            
+                    "resume": ("Resume virtual machine", "network",self.cmdResume),
+                    "poweroff": ("Power off a virtual machine", "network",self.cmdPowerOff),
+                    "powerbutton": ("Power off a virtual machine", "network",self.cmdPowerButton),
+                    "sleepbutton": ("Sleep a virtual machine", "network",self.cmdSleepButton),                  
+                    "exportvm": ("Export virtual machine", "network",self.cmdExportVM),
+                    "importvm": ("Import virtual machine", "network", self.cmdImportVM),
+                    "listvms": ("List virtual machines on current host", "network", self.cmdListVms),
+                    "listrunningvms": ("List running virtual machine on current host", "network", self.cmdListRunningVms),
+                    "host": ("Show info about host", "local", self.cmdHost),
+                    "gcmd": ("Execute a command on guest", "network", self.cmdGcmd),
+                    "gshell": ("Run an interactive shell on guest", "network", self.cmdGshell),
+                    "batch": ("Run a batch file", "local", self.cmdBatch),
+                    "sleep": ("Sleep for a period of time", "local", self.cmdSleep),
+                    "groups": ("Print existing groups", "local", self.cmdGroups),
+                    "creategroup": ("Create a new group", "local", self.cmdCreateGroup),
+                    "removegroup": ("Remove group", "local", self.cmdRemoveGroup),
+                    "addtogroup": ("Add machine to existing local", "network", self.cmdAddToGroup),
+                    "removefromgroup": ("Remove machine existing group", "local", self.cmdRemoveFromGroup),
+                    "load": ("Load configuration from file", "local", self.cmdLoad),
+                    "save": ("Save current configuration to the file", "local", self.cmdSave),
+                    "exit": ("Quit program", "local", self.cmdExit),
                    }
         if self.isRemote:
             commands["addhost"] = ("Add a new host", self.cmdAddHost)
@@ -332,10 +425,9 @@ class Interpret():
             print "Program is not connected to any host, please add some with 'addhost' command"
         while True:
             try:
-                cmd = raw_input(g_prompt)
-                print self.active
-                ret = self.runCmd(cmd)
-                if ret != 0:
+                cmd = raw_input(self.active.prompt)
+                retval = self.runCmd(cmd)
+                if retval != 0:
                     break
             except KeyboardInterrupt:
                 print "Type quit to exit application"
@@ -345,7 +437,7 @@ class Interpret():
                 break
             except Exception:
                 traceback.print_exc()
-                break
+                #break
                 
                          
     def progressBar(self, progress, update_time=1000):
@@ -387,8 +479,10 @@ class Interpret():
         if len(args) > 1:
             print "Wrong arguments for reconnect command. Usage: reconneect <hostname>"
             return 0
-        
+
+
         env = self.envs.get(args[0]) if len(args) > 0 else self.active
+        
         try:
             url, user, password = env.url, env.username, env.password 
         except AttributeError, KeyError:
@@ -454,8 +548,8 @@ class Interpret():
         session = self.active.mgr.getSessionObject(vbox)
         mach.lockMachine(session, self.active.const.LockType_Shared)
         
-        user = raw_input("User: ")
-        password = raw_input("Password: ")
+        user, password = self.getCredentials(machname)
+
         guestSession = session.console.guest.createSession(user, password, '', '')
         guestSession.waitFor(1, 10000) # Wait for session to start
         proc = guestSession.processCreate(executable, guestargs, None, [5,6], 0)
@@ -487,10 +581,13 @@ class Interpret():
         mach = vbox.findMachine(machname)
         session = self.active.mgr.getSessionObject(vbox)
         mach.lockMachine(session, self.active.const.LockType_Shared)
+        pathstyle = session.console.guest.PathStyle 
         
-        user, password = self.getCredentials()
+        executable = r'C:\Windows\System32\cmd.exe' if pathstyle == 0 else r'/bin/sh'
+        user, password = self.getCredentials(machname)
         guestSession = session.console.guest.createSession(user, password, '', '')
         guestSession.waitFor(1, 10000) # Wait for session to start
+        
         proc = guestSession.processCreate(executable, guestargs, None, [5, 6], 0)
         print proc.waitFor(1, 10000) # Wait for process to start
         print proc.PID
@@ -509,7 +606,44 @@ class Interpret():
         guestSession.close()
         session.unlockMachine()
         return 0
+    
+    def cmdBatch(self, args):
+        if len(args) != 1:
+            print "Wrong arguments for batch. Usage: batch <file>"
+            return 0
         
+        try:
+            fp = open(args[0], 'r')
+            
+            for line in fp:
+                split = line.split(';') # There might be more commands on one line
+                for command in split:
+                    retval = self.runCmd(command)
+                    if retval:
+                        break
+        except IOError:
+            print "Could not open batch file"
+        except KeyboardInterrupt:
+            print "Type quit to exit application"
+        except EOFError:
+            print "Violently killed, exiting"
+        except Exception:
+            traceback.print_exc()
+        return 0
+    
+    def cmdLoad(self, args):
+        if len(args) < 1:
+            print "Wrong arguments for loadconfig. Usage: loadconfig <file>"
+        self.loadConfiguration(args[0])
+        return 0
+
+    def cmdSave(self, args):
+        if len(args) < 1:
+            print "Wrong arguments for saveconfig. Usage: saveconfig <file>"
+        self.saveConfiguration(args[0])
+        return 0
+    
+      
     def cmdAddHost(self, args):
         if len(args) < 1 or len(args) > 4:
             print "Wrong arguments for addhost. Usage: addhost <hostname/ip> [port] [user] [password] [displayname]"
@@ -561,7 +695,7 @@ class Interpret():
         host = args[0]
         try:
             self.active = self.envs[host]
-            self.cmdReconnect([""])
+            self.cmdReconnect([])
         except KeyError:
             print "Host does not exist"
         except:
@@ -647,6 +781,22 @@ class Interpret():
                 print str(mach.name) + " " + str(mach.OSTypeId)        
         return 0
     
+    def groupCommand(self, groupname, cmd, args):
+        machines = self.groups.get(groupname).getMachines()
+        for host in machines.keys():
+            if host not in self.envs:
+                print "Unexisting host " + host
+                continue
+            if self.active is not self.envs[host]:
+                self.cmdSwitchHost([host])
+            for machname in machines[host].keys():
+                args[0] = machname
+                try:
+                    cmd(args)
+                except:
+                    traceback.print_exc()
+        return 0 
+        
     def runCommandWithArgs(self, args):
         cmd = args[0]
         args = args[1:] if len(args) > 1 else []
@@ -655,7 +805,14 @@ class Interpret():
         except KeyError:
             print "Unknown command %s. Use 'help' to get commands"%cmd
             return 0
-        return ci[1](args)
+        if ci[1] == "network":
+            self.cmdReconnect([]) # Do not lose connection
+        if len(args) and ci[1] == "network" and args[0] in self.groups.keys():
+            self.groupCommand(args[0], ci[2], args)
+            retval = 0
+        else:
+            retval = ci[2](args) 
+        return retval
         
     def runCmd(self, cmd):
         if len(cmd) == 0:
@@ -692,7 +849,6 @@ if __name__ == "__main__":
             params['hostname'] = params.get('hostname')
             params['user'] = params.get('user', "")
             params['password'] = params.get('password', "")    
-        print params
         env = Environment(params)
     except EnvironmentError as e:
         print str(e) # print error
