@@ -583,12 +583,13 @@ class Interpret():
         mach = vbox.findMachine(machname)
         session = self.active.mgr.getSessionObject(vbox)
         mach.lockMachine(session, self.active.const.LockType_Shared)
-        pathstyle = session.console.guest.PathStyle 
         
-        executable = r'C:\Windows\System32\cmd.exe' if pathstyle == 0 else r'/bin/sh'
         user, password = self.getCredentials(machname)
         guestSession = session.console.guest.createSession(user, password, '', '')
         guestSession.waitFor(1, 10000) # Wait for session to start
+        
+        pathstyle = guestSession.pathStyle
+        executable = r'C:\Windows\System32\cmd.exe' if pathstyle == 'DOS' else r'/bin/sh'
         
         proc = guestSession.processCreate(executable, guestargs, None, [5, 6], 0)
         print proc.waitFor(1, 10000) # Wait for process to start
