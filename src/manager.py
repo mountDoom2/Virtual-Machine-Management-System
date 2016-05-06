@@ -33,9 +33,6 @@ class Group():
             self.machines[host] = {machname: credentials}
         else:
             self.machines[host][machname] = credentials
-        #elif machname not in self.machines[host]:
-        #    self.machines[host].append(machname)
-        #    self.machines[host][machname] = credentials
         return
     
     def removeMachine(self, host, machname):
@@ -306,7 +303,7 @@ class Interpret():
             return 0
         groupname = args[0] 
         group = Group(groupname)
-        if not group:
+        if groupname not in self.groups.keys():
             self.groups[groupname] = group
         else:
             print "Group already exists"
@@ -338,10 +335,13 @@ class Interpret():
         
         if groupname not in self.groups.keys():
             print "Creating a new group"
-            self.cmdCreateGroup(groupname)
+            self.cmdCreateGroup([groupname])
             
         group = self.groups.get(groupname)
-        group.addMachine(hostname, machname, username, password)
+        if group:
+            group.addMachine(hostname, machname, username, password)
+        else:
+            print "Adding to unexisting group, create one with creategroup command"
         return 0
     
     def cmdRemoveFromGroup(self, args):
