@@ -54,7 +54,7 @@ class Environment():
             values = {}
         elif not isinstance(values, dict):
             raise EnvironmentException("Given values are not a dictionary object")
-
+        
         self.hostname = values.get('hostname', 'localhost')
         self.port = values.get('port', 18083)
         self.username = values.get('username', "")
@@ -482,9 +482,11 @@ class Interpret():
             print "Wrong arguments for reconnect command. Usage: reconneect <hostname>"
             return 0
 
-
         env = self.envs.get(args[0]) if len(args) > 0 else self.active
-        
+        print 10*"*"
+        print env.name
+        print env.url
+        print 10*"*"
         try:
             url, user, password = env.url, env.username, env.password 
         except AttributeError, KeyError:
@@ -648,29 +650,36 @@ class Interpret():
     
       
     def cmdAddHost(self, args):
-        if len(args) < 1 or len(args) > 4:
+        if len(args) < 1 or len(args) > 5:
             print "Wrong arguments for addhost. Usage: addhost <hostname/ip> [port] [user] [password] [displayname]"
             return 0
+        print args
+        print args[0]
         host = args[0]
-        port = int(args[1]) if (len(args) > 2 and len(args[1]) > 0) else 18083
-        user = args[2] if len(args) > 3 else ""
-        password = args[3] if len(args) > 4 else ""
-        displayname = args[4] if (len(args) > 4 and len(args[4]) > 0) else None
-        url = "http://" + host + ":" + str(port)
+        port = int(args[1]) if (len(args) > 1 and len(args[1]) > 0) else 18083
+        user = args[2] if len(args) > 2 else ""
+        password = args[3] if len(args) > 3 else ""
+        displayname = args[4] if (len(args) > 4 and len(args[4]) > 0) else host
+        url = "http://" + host + ":" + str(port) + '/'
         params = {'url': url,
                   'user': user,
                   'password': password}
+        
+        if host in self.envs.keys():
+            print "Host already exists"
+            return 0
+                
+        values = {'hostname': host,
+                  'port': port,
+                  'username': user,
+                  'password': password,
+                  'name': displayname,
+                  'style': 'WEBSERVICE'
+                  }
         try:
-            if host in self.envs.keys():
-                print "Host already exists"
-                return 0
+            print params
             vboxMgr = VirtualBoxManager('WEBSERVICE', params)
-            self.envs[host] = Environment({'mgr': vboxMgr,
-                                          'vbox': vboxMgr.vbox,
-                                          'const': vboxMgr.constants,
-                                          'remote': vboxMgr.remote,
-                                          'remoteinfo': [url, user, password]
-                                          })
+            self.envs[displayname] = Environment(values)
         except:
             print "Could not connect to host " + host
         else:
@@ -696,9 +705,11 @@ class Interpret():
             print "Wrong arguments for switchhost. Usage: switchhost <hostname>"
             return 0
         host = args[0]
+        print host
+        print self.envs.keys()
         try:
             self.active = self.envs[host]
-            self.cmdReconnect([])
+            self.cmdReconnect([host])
         except KeyError:
             print "Host does not exist"
         except:
