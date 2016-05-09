@@ -35,11 +35,12 @@ class Group():
             self.machines[host][machname] = credentials
         return
     
-    def removeMachine(self, host, machname):
-        if host in self.machines.keys() and machname in self.machines[host].key():       
-            del self.machines[host][machname]
-            if not len(self.machines[host]):
+    def removeMachine(self, host, machname = None):
+        if host in self.machines.keys():
+            if machname is None:
                 del self.machines[host]
+            elif machname in self.machines[host].keys():       
+                del self.machines[host][machname]
         return
     
     def getName(self):
@@ -54,8 +55,10 @@ class Environment():
             values = {}
         elif not isinstance(values, dict):
             raise EnvironmentException("Given values are not a dictionary object")
+        elif 'hostname' not in values.keys():
+            raise EnvironmentException("Missing hostname")
         
-        self.hostname = values.get('hostname', 'localhost')
+        self.hostname = values.get('hostname')
         self.port = values.get('port', 18083)
         self.username = values.get('username', "")
         self.password = values.get('password', "")
@@ -82,8 +85,9 @@ class Environment():
         self.mgr = mgr
         self.vbox = mgr.vbox
         self.const = mgr.constants
-        self.remote = mgr.remote
         
+        if not any([self.mgr, self.vbox, self.const]):
+            raise EnvironmentException("Failed to initialize environment")
         self.machines = {}
     
     def addMachine(self, machname, user=None, password=None):
@@ -91,22 +95,29 @@ class Environment():
             (user is not None and password is None)):
             print "Must user or password"
             return
-        self.machines[machname] = {'user': user, 'password': password}
+        if machname not in self.machines.keys():
+            self.machines[machname] = {'user': user, 'password': password}
     
     def removeMachine(self, machname):
         if machname in self.machines.keys():
             del self.machines[machname]
+            
+                        
+    def getName(self):
+        return self.name
+    
     def getMachines(self):
         return self.machines
         
 class Interpret():
-    def __init__(self, style):       
+    def __init__(self, style):
         self.envs = {}
+        self.groups = {}
+        
         self.isRemote = (style == 'WEBSERVICE')
         self.commands = self.createCommands()
 
         self.active = None
-        self.groups = {}
     
     def getGroup(self, name):
         return self.groups.get(name)
@@ -440,8 +451,7 @@ class Interpret():
             except Exception:
                 traceback.print_exc()
                 #break
-                
-                         
+                                       
     def progressBar(self, progress, update_time=1000):
         try:
             while not progress.completed:
@@ -653,8 +663,7 @@ class Interpret():
         if len(args) < 1 or len(args) > 5:
             print "Wrong arguments for addhost. Usage: addhost <hostname/ip> [port] [user] [password] [displayname]"
             return 0
-        print args
-        print args[0]
+
         host = args[0]
         port = int(args[1]) if (len(args) > 1 and len(args[1]) > 0) else 18083
         user = args[2] if len(args) > 2 else ""
@@ -819,7 +828,7 @@ class Interpret():
         except KeyError:
             print "Unknown command %s. Use 'help' to get commands"%cmd
             return 0
-        if ci[1] == "network":
+        if self.active.remote and ci[1] == "network":
             self.cmdReconnect([]) # Do not lose connection
         if len(args) and ci[1] == "network" and args[0] in self.groups.keys():
             self.groupCommand(args[0], ci[2], args)
@@ -842,6 +851,7 @@ class Interpret():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("-b", "--batch-file", dest="batch_file", help = "Batch file")
     parser.add_argument("-c", "--config-file", dest="config_file", help = "Configuration file")
     parser.add_argument("-w", "--webservice", dest="style", action="store_const", const="WEBSERVICE", help = "Use webservice")
     parser.add_argument("-o", "--opts", dest="opts", help = "Additional command line parameters")
@@ -862,19 +872,20 @@ if __name__ == "__main__":
         if args.opts:
             params['hostname'] = params.get('hostname')
             params['user'] = params.get('user', "")
-            params['password'] = params.get('password', "")    
+            params['password'] = params.get('password', "")   
+        else: 
+            params['hostname'] = 'localhost'
         env = Environment(params)
     except EnvironmentError as e:
         print str(e) # print error
         sys.exit(1)
     
-
     interpret = Interpret(args.style)
     if (args.config_file):
         interpret.loadConfiguration(args.config_file)
     if 'env' in locals():
         interpret.addEnv(env)
-        interpret.setActiveEnv(env.name)
+        interpret.setActiveEnv(env.getName())
     interpret.run()
     
     # Interpret finished
