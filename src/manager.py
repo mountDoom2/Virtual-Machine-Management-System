@@ -141,7 +141,6 @@ class Interpret():
                 if host != self.active.name:
                     continue                            
                 for mname, credentials in machines.items():
-                    print credentials
                     if machname == mname:
                         user = credentials['user']
                         password = credentials['password']
@@ -157,19 +156,25 @@ class Interpret():
             backupGroups = copy.copy(self.groups)
             lineNum = 0
             with open(filename, 'r') as conf_file:
-        
                 for line in conf_file:
                     lineNum += 1
-                    if len(line) < 3: # Empty line, do not count newline chars (\r\n)
+                    if len(line) < 3 or line.startswith('#'): # Empty line or comment
                         continue
                     split = line.split()
                     if not len(split):
                         continue
-                    params = {'group': None,
+                    params = {'host': None,
+                              'name': None,
+                              'group': None,
                               'user': None,
+                              'port': None,
                               'password': None
                               }
-                    host, machname = split[0].split('/')
+                    type = split[0]
+                    if type not in ['host', 'machine']:
+                        print "Syntax error, line %d must start with keyword 'host' or 'machine', exiting"%lineNum
+                        break
+                    
                     for element in split[1:]:
                         paramName, paramVal = element.split('=')
                         # Accept only first occurence of parameter
@@ -181,11 +186,33 @@ class Interpret():
                         else:
                             print "Undefined parameter '%s' on line %d"%(paramName, lineNum)
                             continue
-                    if params['group'] is not None:
-                        if self.getGroup(params['group']) is None:
-                            group = Group(params['group'])
-                            self.groups[params['group']] = group
-                        self.groups[params['group']].addMachine(host, machname, params['user'], params['password'])               
+                    if type == 'host':
+                        if params.get('group') is not None:
+                            print "Cannot assign host to group, ignoring this parameter, line %d"%lineNum
+                        if params.get('name') is None:
+                            print "Missing host name, line %d"%lineNum
+                            continue
+                        self.cmdAddHost([params.get('name'), params.get('port'), params.get('user'), params.get('password')])
+                    else:
+                        if params.get('port'):
+                            print "Cannot assign port to virtual machine, line %d"%lineNum
+                            continue
+                        if not len(params.get('host', "")):
+                            print "Missing machine hostname, line %d"%lineNum
+                            continue
+                        
+                        print params
+                        if params['group'] is not None:
+                            if self.getGroup(params['group']) is None:
+                                group = Group(params['group'])
+                                self.groups[params['group']] = group
+                            self.groups[params['group']].addMachine(params.get('host'), params.get('name'), params['user'], params['password'])
+                        else:
+                            try:
+                                self.envs[params.get('host')].addMachine(params.get('name'), params.get('user'), params.get('password'))
+                            except KeyError:
+                                print "Host undefined, define it before registering a machine to it, line %d"%lineNum
+                                continue                
         except IOError:
             print "Could not open or read configuration file"
         except (IndexError, ValueError): # Missing host or machine name
@@ -204,19 +231,24 @@ class Interpret():
         # Save environments
         for env in self.envs.values():
             host = env.hostname
-            user = env.username
-            password = env.password
-            
-            for machname, credentials in env.machines:
-                print machname, credentials
+            port = env.port
+            userstr = ("user=" + env.username) if env.username else ""
+            passstr = ("password=" + env.password)  if env.password else ""
+            fp.write("host name=%s port=%d %s %s\n"%(host, port, userstr, passstr))
+            for machname, credentials in env.getMachines().items():
+                print credentials
+                userstr = ("user=" + credentials['user']) if credentials['user'] else ""
+                passstr = ("password=" + credentials['password'])  if credentials['password'] else ""
+                strline = "machine host=%s name=%s user=%s password=%s\n"%(host, machname, userstr, passstr)
+                fp.write(strline)
         
         # Save groups
-        for group in self.groups.values():   
+        for group in self.groups.values():
             for host, machines in group.getMachines().items():
                 for machname, credentials in machines.items():
-                    userstr = ("user=" + credentials['user'])
-                    passstr = ("password=" + credentials['password'])
-                    strline = "%s/%s group=%s %s %s\n"%(host, machname, group.getName(), userstr, passstr)
+                    userstr = ("user=" + credentials['user']) if credentials['user'] else ""
+                    passstr = ("password=" + credentials['password']) if credentials['password'] else ""
+                    strline = "machine host=%s name=%s group=%s %s %s\n"%(host, machname, group.getName(), userstr, passstr)
                     fp.write(strline)
         fp.close()
         return
@@ -304,8 +336,7 @@ class Interpret():
                 for machname, credentials in machines.items():
                     username = str(credentials.get('user', '<empty>'))
                     password = str(credentials.get('password', '<empty>'))
-                    print 8 * " " + machname + " (" + username + ", " + password + ')'
-
+                    print 8 * " " + machname + " (" + username + ", " + password + ")"
         return 0
     
     def cmdCreateGroup(self, args):
@@ -414,6 +445,7 @@ class Interpret():
                     "gcmd": ("Execute a command on guest", "network", self.cmdGcmd),
                     "gshell": ("Run an interactive shell on guest", "network", self.cmdGshell),
                     "batch": ("Run a batch file", "local", self.cmdBatch),
+                    "list": ("List known virtual machines", "local", self.cmdList),
                     "sleep": ("Sleep for a period of time", "local", self.cmdSleep),
                     "groups": ("Print existing groups", "local", self.cmdGroups),
                     "creategroup": ("Create a new group", "local", self.cmdCreateGroup),
@@ -433,7 +465,10 @@ class Interpret():
             commands['reconnect'] = ('Reconnects to a remote Virtual Box', "network", self.cmdReconnect)
         return commands  
      
-    def run(self):
+    def run(self, batch_file=None):
+        if batch_file:
+            self.cmdBatch([batch_file])
+            return
         if self.active is None:
             print "Program is not connected to any host, please add some with 'addhost' command"
         while True:
@@ -448,8 +483,9 @@ class Interpret():
             except EOFError:
                 print "Violently killed, exiting"
                 break
-            except Exception:
-                traceback.print_exc()
+            except Exception as e:
+                print str(e)
+                #traceback.print_exc()
                 #break
                                        
     def progressBar(self, progress, update_time=1000):
@@ -665,10 +701,10 @@ class Interpret():
             return 0
 
         host = args[0]
-        port = int(args[1]) if (len(args) > 1 and len(args[1]) > 0) else 18083
+        port = int(args[1]) if (len(args) > 1 and args[1] and len(args[1]) > 0) else 18083
         user = args[2] if len(args) > 2 else ""
         password = args[3] if len(args) > 3 else ""
-        displayname = args[4] if (len(args) > 4 and len(args[4]) > 0) else host
+        displayname = args[4] if (len(args) > 4 and args[4] and len(args[4]) > 0) else host
         url = "http://" + host + ":" + str(port) + '/'
         params = {'url': url,
                   'user': user,
@@ -686,15 +722,15 @@ class Interpret():
                   'style': 'WEBSERVICE'
                   }
         try:
-            print params
             vboxMgr = VirtualBoxManager('WEBSERVICE', params)
             self.envs[displayname] = Environment(values)
         except:
             print "Could not connect to host " + host
         else:
             if self.active is None:
-                print "This is the first known host, setting it as active"
+                print "This is the first known host (%s), setting it as active"%self.envs[host].getName()
                 self.active = self.envs[host]
+        print "Environments: %s"%str(self.envs.keys())
         return 0
     
     def cmdRemoveHost(self, args):
@@ -780,6 +816,15 @@ class Interpret():
         if len(args) != 0:
             print "Wrong arguments for host"
             return 0
+        return 0
+    
+    def cmdList(self, args):
+        for hostname, env in self.envs.items():
+            print hostname
+            print env.getMachines()
+            print env.getMachines().keys()
+            for machname, credentials in env.getMachines().items():
+                print 4*" " + "Machine: %s, User: %s, Password: %s"%(machname, credentials.get('user'), credentials.get('password'))
         return 0
     
     def cmdListVms(self, args):
@@ -883,10 +928,11 @@ if __name__ == "__main__":
     interpret = Interpret(args.style)
     if (args.config_file):
         interpret.loadConfiguration(args.config_file)
-    if 'env' in locals():
+    if not interpret.active and 'env' in locals():
         interpret.addEnv(env)
         interpret.setActiveEnv(env.getName())
-    interpret.run()
+
+    interpret.run(args.batch_file)
     
     # Interpret finished
     for env in interpret.envs.values():
