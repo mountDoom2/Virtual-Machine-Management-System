@@ -732,14 +732,14 @@ class Interpret():
     
     def cmdLoad(self, args):
         if len(args) < 1:
-            print "Wrong arguments for loadconfig. Usage: loadconfig <file>"
+            print "Wrong arguments for load. Usage: load <config_file>"
             return 0
         self.loadConfiguration(args[0])
         return 0
 
     def cmdSave(self, args):
         if len(args) < 1:
-            print "Wrong arguments for saveconfig. Usage: saveconfig <file>"
+            print "Wrong arguments for save. Usage: save <config_file>"
             return 0
         self.saveConfiguration(args[0])
         return 0
