@@ -1,1 +1,4 @@
-g_prompt = "manager> "
+historySupport = False
+cmdCompleter = False
+
+maxHistoryLen = 100

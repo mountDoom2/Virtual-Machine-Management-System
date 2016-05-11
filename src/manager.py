@@ -1,20 +1,49 @@
-from vboxapi import *
-import copy
 import argparse
+import copy
 import os
 from os import path
-import sys
-import shlex
 import re
+import shlex
+import sys
 import time
-import traceback
-#TODO: command for setting env. variable
-#      performance collector
-#      set cpus/ram/gram
+from vboxapi import *
 
 sys.path.append(path.dirname(path.dirname(path.realpath(sys.argv[0]))))
 from modules.errors import *
 from modules.globals import *
+
+try:
+    import readline
+    import rlcompleter
+    historySupport = True
+    cmdCompleter = True
+except:
+    pass
+
+class commandCompleter(rlcompleter.Completer):
+        def __init__(self, cmds):
+            rlcompleter.Completer.__init__(self, cmds)
+
+        def complete(self, text, state):
+            return rlcompleter.Completer.complete(self, text, state)
+
+        def isCommand(self, text):
+            try:
+                hasSpace = text.index(" ")
+            except ValueError:
+                return True
+            else:
+                return False
+            
+        def global_matches(self, text):
+            matches = []
+            length = len(text)
+            if self.isCommand(text):
+                for cmds in [self.namespace]:
+                    for cmd in cmds:
+                        if cmd[:length] == text:
+                            matches.append(cmd)
+            return matches
 
 class Group():
     def __init__(self, name):
@@ -28,7 +57,7 @@ class Group():
             print "Must user or password"
             return
         credentials = {'user': user, 'password': password}
-        
+        print credentials
         if host not in self.machines.keys():
             self.machines[host] = {machname: credentials}
         else:
@@ -55,18 +84,18 @@ class Environment():
             values = {}
         elif not isinstance(values, dict):
             raise EnvironmentException("Given values are not a dictionary object")
-        elif 'hostname' not in values.keys():
+        elif 'host' not in values.keys() or not len(values.get('host')):
             raise EnvironmentException("Missing hostname")
         
-        self.hostname = values.get('hostname')
-        self.port = values.get('port', 18083)
-        self.username = values.get('username', "")
-        self.password = values.get('password', "")
-        self.name = values.get('name') if (values.get('name') and len(values.get('name'))) else self.hostname
+        self.host = values.get('host')
+        self.port = values.get('port') if values.get('port') else 18083 
+        self.user = values.get('user') if values.get('user') else ""
+        self.password = values.get('password') if values.get('port') else ""
+        self.name = values.get('name') if (values.get('name') and len(values.get('name'))) else self.host
         self.style = values.get('style')
         self.remote = (self.style == 'WEBSERVICE')
-        if self.username:
-            self.prompt = self.username + '@' + self.name + '>'
+        if self.user:
+            self.prompt = self.user + '@' + self.name + '>'
         else:
             self.prompt = self.name + '>'
         
@@ -75,9 +104,9 @@ class Environment():
         self.const = None
         params = None
         if self.remote:
-            self.url = 'http://' + self.hostname + ':' + str(self.port)        
+            self.url = 'http://' + self.host + ':' + str(self.port)        
             params = {'url': self.url,
-                      'user': self.username,
+                      'user': self.user,
                       'password': self.password,
                       }
 
@@ -101,8 +130,7 @@ class Environment():
     def removeMachine(self, machname):
         if machname in self.machines.keys():
             del self.machines[machname]
-            
-                        
+                          
     def getName(self):
         return self.name
     
@@ -119,6 +147,13 @@ class Interpret():
 
         self.active = None
     
+    
+    def setCmdAutoCompletion(self):
+        cmdDict = dict((key, None) for key in self.commands.keys())
+        completer = commandCompleter(cmdDict)
+        readline.set_completer(completer.complete)
+        readline.parse_and_bind("tab: complete")
+    
     def getGroup(self, name):
         return self.groups.get(name)
         
@@ -131,7 +166,7 @@ class Interpret():
     
     def getCredentials(self, machname):
         if machname in self.active.getMachines().keys():
-            user = self.active.getMachines()[machname]['username']
+            user = self.active.getMachines()[machname]['user']
             password = self.active.getMachines()[machname]['password']
             if len(user) and len(password):
                 return user, password
@@ -230,9 +265,9 @@ class Interpret():
             return
         # Save environments
         for env in self.envs.values():
-            host = env.hostname
+            host = env.host
             port = env.port
-            userstr = ("user=" + env.username) if env.username else ""
+            userstr = ("user=" + env.user) if env.user else ""
             passstr = ("password=" + env.password)  if env.password else ""
             fp.write("host name=%s port=%d %s %s\n"%(host, port, userstr, passstr))
             for machname, credentials in env.getMachines().items():
@@ -381,6 +416,7 @@ class Interpret():
             
         group = self.groups.get(groupname)
         if group:
+            print "Adding to group"
             group.addMachine(hostname, machname, username, password)
         else:
             print "Adding to unexisting group, create one with creategroup command"
@@ -417,7 +453,7 @@ class Interpret():
             return 0
         time.sleep(float(args[0]))
         return 0
-                
+    
     def lockSession(self, machname):
         vbox = self.active.vbox
         const = self.active.const
@@ -426,7 +462,7 @@ class Interpret():
         machine.lockMachine(session, const.LockType_Shared)
         return machine, session
         
-    def createCommands(self):
+    def createCommands(self):       
         commands = {"help": ("Prints this help", "local", self.cmdHelp),
                     "createvm": ("Create a virtual machine", "network", self.cmdCreateVM),
                     "removevm": ("Remove a virtual machine", "network",self.cmdRemoveVM),
@@ -463,30 +499,42 @@ class Interpret():
             commands['connect'] = ('Connect to remote Virtual Box', "network", self.cmdConnect)
             commands['disconnect'] = ('Disconnect from remote Virtual Box', "network", self.cmdDisconnect)
             commands['reconnect'] = ('Reconnects to a remote Virtual Box', "network", self.cmdReconnect)
+
         return commands  
      
     def run(self, batch_file=None):
+        global historySupport, cmdCompleter, maxHistoryLen
         if batch_file:
             self.cmdBatch([batch_file])
             return
         if self.active is None:
             print "Program is not connected to any host, please add some with 'addhost' command"
+        
+        hist_file = os.path.join(os.path.expanduser("~"), ".managerhistory")
+        
+        if cmdCompleter:
+            self.setCmdAutoCompletion()
+        if historySupport and os.path.exists(hist_file):
+            readline.set_history_length(maxHistoryLen)
+            readline.read_history_file(hist_file)
+
         while True:
             try:
-                cmd = raw_input(self.active.prompt)
+                prompt = self.active.prompt if self.active else ">" 
+                cmd = raw_input(prompt)
                 retval = self.runCmd(cmd)
                 if retval != 0:
                     break
             except KeyboardInterrupt:
                 print "Type quit to exit application"
-                break
             except EOFError:
                 print "Violently killed, exiting"
                 break
             except Exception as e:
                 print str(e)
-                #traceback.print_exc()
-                #break
+                
+        if historySupport:
+            readline.write_history_file(hist_file) 
                                        
     def progressBar(self, progress, update_time=1000):
         try:
@@ -529,12 +577,8 @@ class Interpret():
             return 0
 
         env = self.envs.get(args[0]) if len(args) > 0 else self.active
-        print 10*"*"
-        print env.name
-        print env.url
-        print 10*"*"
         try:
-            url, user, password = env.url, env.username, env.password 
+            url, user, password = env.url, env.user, env.password 
         except AttributeError, KeyError:
             print "Trying to reconnect to the unknown host machine"
             return 0
@@ -599,22 +643,26 @@ class Interpret():
         mach.lockMachine(session, self.active.const.LockType_Shared)
         
         user, password = self.getCredentials(machname)
-
-        guestSession = session.console.guest.createSession(user, password, '', '')
-        guestSession.waitFor(1, 10000) # Wait for session to start
-        proc = guestSession.processCreate(executable, guestargs, None, [5,6], 0)
-        print proc.waitFor(1, 10000) # Wait for process to start
-        print proc.PID
-        data = proc.read(1, 4096, 10000)
-        print "stdout: " + str(data)
+        try:
+            guestSession = session.console.guest.createSession(user, password, '', '')
+            guestSession.waitFor(1, 10000) # Wait for session to start
+            proc = guestSession.processCreate(executable, guestargs, None, [5,6], 0)
+        except Exception as e:
+            print str(e)
+        else:
+            print proc.waitFor(1, 10000) # Wait for process to start
+            print proc.PID
+            data = proc.read(1, 4096, 10000)
+            print "stdout: " + str(data)
+            
+            data = proc.read(2, 4096, 10000)
+            print "sterr: " + str(data)
+            print proc.status
         
-        data = proc.read(2, 4096, 10000)
-        print "sterr: " + str(data)
-        print proc.status
-    
-        print proc.waitFor(2, 10000) # Wait for terminate
-        print proc.exitCode
-        session.unlockMachine()
+            print proc.waitFor(2, 10000) # Wait for terminate
+            print proc.exitCode
+        finally:
+            session.unlockMachine()
         return 0
    
     def cmdGshell(self, args):
@@ -622,40 +670,40 @@ class Interpret():
             print "Wrong arguments for guest. Usage: <machine_name|uuid>"
             return 0
         machname = args[0]
-        #executable = r'C:\Codasip\MinGW\bin\sh.exe'#
-        executable = r'C:\Windows\System32\cmd.exe'
-        #executable = r'/bin/sh'
         guestargs = args[1:]
 
         vbox = self.active.vbox
         mach = vbox.findMachine(machname)
         session = self.active.mgr.getSessionObject(vbox)
         mach.lockMachine(session, self.active.const.LockType_Shared)
-        
-        user, password = self.getCredentials(machname)
-        guestSession = session.console.guest.createSession(user, password, '', '')
-        guestSession.waitFor(1, 10000) # Wait for session to start
-        
-        pathstyle = guestSession.pathStyle
-        executable = r'C:\Windows\System32\cmd.exe' if pathstyle == 'DOS' else r'/bin/sh'
-        
-        proc = guestSession.processCreate(executable, guestargs, None, [5, 6], 0)
-        print proc.waitFor(1, 10000) # Wait for process to start
-        print proc.PID
-        while True:
-            data = proc.read(1, 8192, 10000)
-            print "stdout: " + str(data)
-            if proc.status == self.active.const.ProcessStatus_TerminatedNormally:
-                print "Exit code: " + str(proc.exitCode)
-                break
-            inp = raw_input("cmd>")
-            written = proc.write(0, 0, inp + '\n', 10000)            
-            data = proc.read(2, 8192, 10000)
-            print "sterr: " + str(data)
-        
-        proc.waitFor(2, 10000) # Wait for terminate
-        guestSession.close()
-        session.unlockMachine()
+        try:
+            user, password = self.getCredentials(machname)
+            guestSession = session.console.guest.createSession(user, password, '', '')
+            guestSession.waitFor(1, 10000) # Wait for session to start
+        except Exception as e:
+            print str(e)
+        else:  
+            pathstyle = guestSession.pathStyle
+            executable = r'C:\Windows\System32\cmd.exe' if pathstyle == 'DOS' else r'/bin/sh'
+            
+            proc = guestSession.processCreate(executable, guestargs, None, [5, 6], 0)
+            print proc.waitFor(1, 10000) # Wait for process to start
+            print proc.PID
+            while True:
+                data = proc.read(1, 8192, 10000)
+                print "stdout: " + str(data)
+                if proc.status == self.active.const.ProcessStatus_TerminatedNormally:
+                    print "Exit code: " + str(proc.exitCode)
+                    break
+                inp = raw_input("cmd>")
+                written = proc.write(0, 0, inp + '\n', 10000)            
+                data = proc.read(2, 8192, 10000)
+                print "sterr: " + str(data)
+            
+            proc.waitFor(2, 10000) # Wait for terminate
+            guestSession.close()
+        finally:
+            session.unlockMachine()
         return 0
     
     def cmdBatch(self, args):
@@ -678,19 +726,21 @@ class Interpret():
             print "Type quit to exit application"
         except EOFError:
             print "Violently killed, exiting"
-        except Exception:
-            traceback.print_exc()
+        except Exception as e:
+            print str(e)
         return 0
     
     def cmdLoad(self, args):
         if len(args) < 1:
             print "Wrong arguments for loadconfig. Usage: loadconfig <file>"
+            return 0
         self.loadConfiguration(args[0])
         return 0
 
     def cmdSave(self, args):
         if len(args) < 1:
             print "Wrong arguments for saveconfig. Usage: saveconfig <file>"
+            return 0
         self.saveConfiguration(args[0])
         return 0
     
@@ -714,9 +764,9 @@ class Interpret():
             print "Host already exists"
             return 0
                 
-        values = {'hostname': host,
+        values = {'host': host,
                   'port': port,
-                  'username': user,
+                  'user': user,
                   'password': password,
                   'name': displayname,
                   'style': 'WEBSERVICE'
@@ -760,7 +810,7 @@ class Interpret():
         except:
             print "Could not switch to host, unable to connect"
         else:
-            print "Host successfully switched"
+            print "Host successfully switched to " + host
         return 0
     
     def cmdStartVM(self, args):
@@ -771,7 +821,7 @@ class Interpret():
         machine = self.active.vbox.findMachine(name)
         session = self.active.mgr.getSessionObject(self.active.vbox)
         progress = machine.launchVMProcess(session, "gui", "")
-        self.progressBar(progress, 100)
+        self.progressBar(progress, 1000)
         
         return 0
     
@@ -792,7 +842,6 @@ class Interpret():
         desc = machine.exportTo(appliance, '')
         progress = appliance.write(format, None, expPath)
         self.progressBar(progress)
-        print "Export completed"
         return 0
     
     def cmdImportVM(self, args):
@@ -851,6 +900,7 @@ class Interpret():
     
     def groupCommand(self, groupname, cmd, args):
         machines = self.groups.get(groupname).getMachines()
+        print machines
         for host in machines.keys():
             if host not in self.envs:
                 print "Unexisting host " + host
@@ -861,8 +911,8 @@ class Interpret():
                 args[0] = machname
                 try:
                     cmd(args)
-                except:
-                    traceback.print_exc()
+                except Exception as e:
+                    print str(e)
         return 0 
         
     def runCommandWithArgs(self, args):
@@ -876,6 +926,7 @@ class Interpret():
         if self.active.remote and ci[1] == "network":
             self.cmdReconnect([]) # Do not lose connection
         if len(args) and ci[1] == "network" and args[0] in self.groups.keys():
+            print "Group command"
             self.groupCommand(args[0], ci[2], args)
             retval = 0
         else:
@@ -912,14 +963,15 @@ if __name__ == "__main__":
         except:
             print "Arguments in wrong format, exiting..."
             sys.exit(1)
-    
+
     try:
         if args.opts:
-            params['hostname'] = params.get('hostname')
+            params['host'] = params.get('host')
+            params['port'] = params.get('port', 18083)
             params['user'] = params.get('user', "")
             params['password'] = params.get('password', "")   
         else: 
-            params['hostname'] = 'localhost'
+            params['host'] = 'localhost'
         env = Environment(params)
     except EnvironmentError as e:
         print str(e) # print error
