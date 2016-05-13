@@ -30,15 +30,16 @@ class commandCompleter(rlcompleter.Completer):
         def isCommand(self, text):
             try:
                 hasSpace = text.index(" ")
+                return False
             except ValueError:
                 return True
-            else:
-                return False
             
         def global_matches(self, text):
             matches = []
-            length = len(text)
-            if self.isCommand(text):
+            inp = readline.get_line_buffer()
+            length = len(inp)
+
+            if self.isCommand(inp):
                 for cmds in [self.namespace]:
                     for cmd in cmds:
                         if cmd[:length] == text:
