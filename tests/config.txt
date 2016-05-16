@@ -1,3 +1,5 @@
-localhost/win group=group1 user=user password=123456
-localhost/centos group=group1 user=milan password=  
+host name=localhost
+host name=192.168.0.106 user=nic30 password=12345
 
+machine name=win host=localhost group=group1
+machine name=win host=192.168.0.106 group=group1
