@@ -425,6 +425,7 @@ class Interpreter():
                     "save": ("Save current configuration to the file", "local", self.cmdSave),
                     "exit": ("Exit program", "local", self.cmdExit),
                     "quit": ("Quit program", "local", self.cmdExit),
+                    "test": ("Check if application is ready", "local", self.cmdTest),
                    }
         if self.isRemote: # Additional commands
             commands["addhost"] = ("Add a new host machine", "network", self.cmdAddHost)
@@ -1356,13 +1357,19 @@ class Interpreter():
             if state in ['FirstOnline', 'LastOnline']:
                 print str(mach.name) + " " + str(mach.OSTypeId)        
         return 0
-
+    
+    def cmdTest(self, args):
+        print "Current Environment: " + (self.active.name if self.active else "None")        
+        print "Using " + ("Webservice" if self.isRemote else "COM model")
+        print "VirtualBox Manager - " + ("OK" if self.active and self.active.mgr else "None")
+        print "VirtualBox Instance - " + ("OK" if self.active and self.active.vbox else "None")
+        
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("-b", "--batch-file", dest="batch_file", help = "Batch file")
+    parser.add_argument("-b", "--batch-file", dest="batch_file", help = "Batch file. If this argument is used, interpreter will start in automatic mode, which means that user will not be able to control it")
     parser.add_argument("-c", "--config-file", dest="config_file", help = "Configuration file")
-    parser.add_argument("-w", "--webservice", dest="style", action="store_const", const="WEBSERVICE", help = "Use webservice")
-    parser.add_argument("-o", "--opts", dest="opts", help="Additional command line parameters")
+    parser.add_argument("-w", "--webservice", dest="style", action="store_const", const="WEBSERVICE", help = "Use webservice. If not passed, COM model is used")
+    parser.add_argument("-o", "--opts", dest="opts", help="Additional command line parameters. Parameters must be split by a single comma. Parameters are passed in format paramname=paramvalue. Supported parameters are: host, port, user, password")
     args = parser.parse_args(sys.argv[1:])
     
     params = {'style' : args.style}
