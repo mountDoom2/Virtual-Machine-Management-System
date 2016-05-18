@@ -395,7 +395,7 @@ class Interpreter():
         commands = {"help": ("Prints this help", "local", self.cmdHelp),
                     "createvm": ("Create a virtual machine", "network", self.cmdCreateVM),
                     "removevm": ("Remove a virtual machine", "network",self.cmdRemoveVM),
-                    "start": ("Start virtual machine", "network",self.cmdStartVM),
+                    "start": ("Start a virtual machine", "network",self.cmdStartVM),
                     "restart": ("Restart virtual machine", "network",self.cmdRestartVM),
                     "pause": ("Pause virtual machine", "network",self.cmdPause),            
                     "resume": ("Resume virtual machine", "network",self.cmdResume),
@@ -403,7 +403,7 @@ class Interpreter():
                     "powerbutton": ("Power off a virtual machine", "network",self.cmdPowerButton),
                     "sleepbutton": ("Sleep a virtual machine", "network",self.cmdSleepButton),                  
                     "exportvm": ("Export virtual machine to given destination", "network",self.cmdExportVM),
-                    "importvm": ("Import virtual machine from image", "network", self.cmdImportVM),
+                    "importvm": ("Import virtual machine from appliance", "network", self.cmdImportVM),
                     "listhostvms": ("List virtual machines on current host", "network", self.cmdListVms),
                     "listrunningvms": ("List running virtual machine on current host", "network", self.cmdListRunningVms),
                     "gcmd": ("Execute a command on guest", "network", self.cmdGcmd),
@@ -1313,9 +1313,13 @@ class Interpreter():
         return 0
     
     def cmdList(self, args):
+        isAny = False
         for hostname, env in self.envs.items():
             for machname, credentials in env.getMachines().items():
+                isAny = True
                 print 4*" " + "Machine: %s, User: %s, Password: %s"%(machname, credentials.get('user'), credentials.get('password'))
+        if not isAny:
+            print "No known machines"
         return 0
     
     def cmdHost(self, args):
@@ -1350,12 +1354,16 @@ class Interpreter():
         if len(args) != 0:
             print "Wrong arguments for listrunningvms"
             return 0
+        isAny = False
         vbox = self.active.vbox
         machines = self.active.mgr.getArray(vbox, 'machines')
         for mach in machines:
             state = mach.state
             if state in ['FirstOnline', 'LastOnline']:
-                print str(mach.name) + " " + str(mach.OSTypeId)        
+                isAny = True
+                print str(mach.name) + " " + str(mach.OSTypeId)
+        if not isAny:
+            print "No running machines"        
         return 0
     
     def cmdTest(self, args):
